@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../notifications/notification_import.dart';
+import '../notifications/notification_inbox.dart';
+import '../notifications/notification_review_dialog.dart';
 import '../settings/settings_page.dart';
 import 'day_picker.dart';
 import 'itinerary.dart';
@@ -22,6 +27,76 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   bool _scrolling = false;
   int _destinationIndex = 0;
   DateTime _day = planDay(DateTime.now());
+  AppLifecycleListener? _notificationLifecycle;
+  StreamSubscription<dynamic>? _notificationChanges;
+  bool _syncingNotifications = false;
+  bool _reviewingNotifications = false;
+
+  bool get _notificationsAvailable =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!_notificationsAvailable) return;
+    _notificationLifecycle = AppLifecycleListener(
+      onResume: () => _syncNotifications(review: true),
+    );
+    _notificationChanges = NotificationInbox.changes.listen(
+      (_) => _syncNotifications(),
+      onError: (Object _) => _syncNotifications(),
+    );
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _syncNotifications(review: true),
+    );
+  }
+
+  @override
+  void dispose() {
+    _notificationChanges?.cancel();
+    _notificationLifecycle?.dispose();
+    super.dispose();
+  }
+
+  /// Adds newly parsed notification events to the itinerary right away.
+  Future<void> _syncNotifications({bool review = false}) async {
+    if (!_notificationsAvailable || _syncingNotifications) return;
+    _syncingNotifications = true;
+    try {
+      final importer = ref.read(notificationImporterProvider);
+      try {
+        await importer.sync();
+      } catch (_) {
+        // 读取通知或写入行程失败时保持现状，下次再试。
+      }
+      if (review && mounted) await _reviewImports();
+    } catch (_) {
+      // 弹窗失败时不影响日程使用。
+    } finally {
+      _syncingNotifications = false;
+    }
+  }
+
+  /// Asks once per app start which automatic additions should stay.
+  Future<void> _reviewImports() async {
+    if (_reviewingNotifications || !mounted) return;
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    final importer = ref.read(notificationImporterProvider);
+    final pending = await importer.pending();
+    if (pending.isEmpty || !mounted) return;
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    _reviewingNotifications = true;
+    try {
+      final removed = await showDialog<Set<String>>(
+        context: context,
+        builder: (_) => NotificationReviewDialog(items: pending),
+      );
+      if (removed == null) return;
+      await importer.resolve(pending, removed);
+    } finally {
+      _reviewingNotifications = false;
+    }
+  }
 
   Future<void> _change(Future<void> Function(PlanController) operation) async {
     setState(() => _working = true);

@@ -1,13 +1,12 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../itinerary/plan_controller.dart';
 import '../itinerary/task_editor.dart';
 import 'notification_analysis.dart';
+import 'notification_event.dart';
 import 'notification_inbox.dart';
 import 'notification_model_page.dart';
 
@@ -306,21 +305,14 @@ class _NotificationDetailState extends State<_NotificationDetail> {
   }
 
   Widget _scheduleAction(AndroidNotice notice, ExtractedEvent event) {
-    final key = jsonEncode([
-      notice.key,
-      event.kind.name,
-      event.title,
-      event.date,
-      event.time,
-      event.reference,
-      event.evidence,
-    ]);
-    final id = 'notice-${sha256.convert(utf8.encode(key))}';
-    final day = _added[id] ?? DateTime.tryParse(event.date ?? '');
+    final id = notificationTaskId(notice, event);
+    final day =
+        _added[id] ??
+        DateTime.tryParse(event.date ?? '') ??
+        planDay(notice.localPostedAt);
     return Consumer(
       builder: (context, ref, _) {
         final added =
-            day != null &&
             ref
                     .watch(itineraryProvider(day))
                     .asData
