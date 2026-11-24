@@ -125,8 +125,8 @@ class _MemoryRepository implements PlanRepository {
   SavedPlan plan = SavedPlan([]);
 
   @override
-  Future<SavedPlan> load() async => plan;
+  Future<SavedPlan> load(DateTime day) async => plan;
 
   @override
-  Future<void> save(SavedPlan next) async => plan = next;
+  Future<void> save(DateTime day, SavedPlan next) async => plan = next;
 }

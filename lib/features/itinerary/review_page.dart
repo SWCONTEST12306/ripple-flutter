@@ -7,11 +7,13 @@ import 'plan_controller.dart';
 class ReviewPage extends ConsumerStatefulWidget {
   const ReviewPage({
     super.key,
+    required this.day,
     required this.plan,
     required this.analysis,
     required this.options,
   });
 
+  final DateTime day;
   final SavedPlan plan;
   final PlanAnalysis analysis;
   final List<ReplanOption> options;
@@ -28,7 +30,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     setState(() => _working = true);
     try {
       await ref
-          .read(itineraryProvider.notifier)
+          .read(itineraryProvider(widget.day).notifier)
           .applyOption(_selection!, widget.plan);
       if (mounted && ModalRoute.of(context)?.isCurrent == true) {
         Navigator.pop(context);
