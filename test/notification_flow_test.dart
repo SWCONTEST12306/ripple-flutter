@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:ripple_app/features/itinerary/itinerary.dart';
 import 'package:ripple_app/features/itinerary/plan_controller.dart';
 import 'package:ripple_app/features/notifications/notification_analysis.dart';
 import 'package:ripple_app/features/notifications/notification_event.dart';
@@ -135,6 +136,73 @@ void main() {
     expect(store.importedIds, hasLength(1));
   });
 
+  testWidgets('a repeated notification that disagrees with the edited time', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final repository = _MemoryPlans();
+    final notice = _notice();
+    final parsed = jsonDecode(notice['analysis'] as String) as Map<String, dynamic>;
+    final event = ExtractedEvent.fromJson(
+      (parsed['events'] as List).first as Map<String, dynamic>,
+    );
+    final id = notificationTaskId(AndroidNotice.fromMap(notice), event);
+    final day = DateTime(2026, 11, 25);
+    // 用户把自动加入的 15:30 改成了 16:00。
+    repository.days[day] = SavedPlan([
+      ItineraryTask(
+        id: id,
+        title: '项目评审',
+        start: 16 * 60,
+        duration: 45,
+        location: '会议室 A',
+        timing: Timing.flexible,
+      ),
+    ]);
+    final store = _MemoryImportStore(imported: [id]);
+
+    _mockChannels(
+      messenger,
+      model: () => {'url': 'https://api.deepseek.com', 'model': 'deepseek-flash'},
+      onModelSave: (_) {},
+      sources: () => {
+        'authorized': true,
+        'master': true,
+        'apps': {'example.meetings': '会务应用'},
+      },
+      onSourcesSave: (_) {},
+      inbox: () => {
+        'authorized': true,
+        'entries': [notice],
+      },
+    );
+
+    await tester.pumpWidget(_app(repository, store));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+
+    expect(find.text('又收到相同的通知'), findsOneWidget);
+    expect(find.textContaining('当前日程　16:00'), findsOneWidget);
+    await tester.tap(find.text('另加一项'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('完成'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle();
+
+    expect(repository.days[day]!.tasks, hasLength(2));
+    final copy = repository.days[day]!.tasks.firstWhere(
+      (task) => task.id != id,
+    );
+    expect(copy.title, '项目评审');
+    expect(copy.start, 15 * 60 + 30);
+    expect(store.pendingItems, isEmpty);
+  });
+
   testWidgets('reviewed events can still be added from the notification', (
     tester,
   ) async {
@@ -172,7 +240,7 @@ void main() {
 
     await tester.pumpWidget(_app(repository, store));
     await tester.pumpAndSettle();
-    expect(find.text('已自动加入日程'), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing);
     await tester.tap(find.widgetWithText(NavigationDestination, '设置'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('查看最近通知'));
@@ -310,6 +378,7 @@ class _MemoryImportStore implements NotificationImportStore {
 
   final pendingItems = <PendingAddition>[];
   final importedIds = <String>{};
+  final reminderKeys = <String>{};
 
   @override
   Future<List<PendingAddition>> pending() async => List.of(pendingItems);
@@ -327,6 +396,14 @@ class _MemoryImportStore implements NotificationImportStore {
   @override
   Future<void> markImported(Iterable<String> ids) async {
     importedIds.addAll(ids);
+  }
+
+  @override
+  Future<Set<String>> reminders() async => Set.of(reminderKeys);
+
+  @override
+  Future<void> markReminded(Iterable<String> keys) async {
+    reminderKeys.addAll(keys);
   }
 }
 

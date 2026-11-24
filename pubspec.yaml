@@ -1,7 +1,7 @@
 name: ripple_app
 description: 涟漪行程冲突分析与调整
 publish_to: none
-version: 0.1.5+6
+version: 0.1.6+7
 
 environment:
   sdk: ^3.14.0

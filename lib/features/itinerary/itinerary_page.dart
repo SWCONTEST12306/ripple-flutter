@@ -58,18 +58,20 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     super.dispose();
   }
 
-  /// Adds newly parsed notification events to the itinerary right away.
+  /// Adds newly parsed notification events to the itinerary right away, and
+  /// asks about repeated notifications that no longer match the schedule.
   Future<void> _syncNotifications({bool review = false}) async {
     if (!_notificationsAvailable || _syncingNotifications) return;
     _syncingNotifications = true;
     try {
       final importer = ref.read(notificationImporterProvider);
+      var reminders = 0;
       try {
-        await importer.sync();
+        reminders = (await importer.sync()).reminders;
       } catch (_) {
         // 读取通知或写入行程失败时保持现状，下次再试。
       }
-      if (review && mounted) await _reviewImports();
+      if ((review || reminders > 0) && mounted) await _reviewImports();
     } catch (_) {
       // 弹窗失败时不影响日程使用。
     } finally {
@@ -87,12 +89,12 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     if (ModalRoute.of(context)?.isCurrent != true) return;
     _reviewingNotifications = true;
     try {
-      final removed = await showDialog<Set<String>>(
+      final decisions = await showDialog<Map<String, ImportDecision>>(
         context: context,
         builder: (_) => NotificationReviewDialog(items: pending),
       );
-      if (removed == null) return;
-      await importer.resolve(pending, removed);
+      if (decisions == null) return;
+      await importer.resolve(pending, decisions);
     } finally {
       _reviewingNotifications = false;
     }

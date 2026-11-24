@@ -184,6 +184,10 @@ internal object NotificationInbox {
         worker.execute {
             val sources = runCatching { NotificationSources.current(context) }.getOrNull()
             var changed = signal
+            // The same notification can be posted again unchanged, for example
+            // when a chat app repeats a message. Flutter still has to look at it
+            // because the user may have edited the imported event meanwhile.
+            var repeated = false
             try {
                 changed = update(context) { current ->
                     val entries = current.associateByTo(mutableMapOf()) { it.notice.key }
@@ -192,6 +196,8 @@ internal object NotificationInbox {
                         val previous = entries[entry.key]?.notice
                         if (previous == null || (entry != previous && entry.postedAt >= previous.postedAt)) {
                             entries[entry.key] = NotificationRecord(entry)
+                        } else if (entry == previous) {
+                            repeated = true
                         }
                     }
                     entries.values
@@ -199,7 +205,7 @@ internal object NotificationInbox {
             } catch (_: IOException) {
                 changed = true
             }
-            if (changed) notifyObservers()
+            if (changed || repeated) notifyObservers()
             NotificationExtractor.wake(context)
         }
     }
