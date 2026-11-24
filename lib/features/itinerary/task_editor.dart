@@ -1,15 +1,35 @@
+import 'dart:math';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'day_picker.dart';
 import 'itinerary.dart';
 import 'plan_controller.dart';
 
-class TaskEditor extends ConsumerStatefulWidget {
-  const TaskEditor({super.key, required this.tasks, this.task});
+class TaskDraft {
+  const TaskDraft({
+    required this.id,
+    required this.title,
+    this.location,
+    this.start,
+    this.duration,
+  });
 
-  final List<ItineraryTask> tasks;
+  final String id;
+  final String title;
+  final String? location;
+  final int? start;
+  final int? duration;
+}
+
+class TaskEditor extends ConsumerStatefulWidget {
+  const TaskEditor({super.key, required this.day, this.task, this.draft});
+
+  final DateTime? day;
   final ItineraryTask? task;
+  final TaskDraft? draft;
 
   @override
   ConsumerState<TaskEditor> createState() => _TaskEditorState();
@@ -17,15 +37,23 @@ class TaskEditor extends ConsumerStatefulWidget {
 
 class _TaskEditorState extends ConsumerState<TaskEditor> {
   final _form = GlobalKey<FormState>();
-  late final _title = TextEditingController(text: widget.task?.title);
-  late final _location = TextEditingController(text: widget.task?.location);
+  late final _title = TextEditingController(
+    text: widget.task?.title ?? widget.draft?.title,
+  );
+  late final _location = TextEditingController(
+    text: widget.task?.location ?? widget.draft?.location,
+  );
   late final _duration = TextEditingController(
-    text: '${widget.task?.duration ?? 30}',
+    text:
+        '${widget.task?.duration ?? widget.draft?.duration ?? (widget.draft == null ? 30 : 0)}',
   );
   late final _transfer = TextEditingController(
     text: '${widget.task?.transfer ?? 0}',
   );
-  late int _start = widget.task?.start ?? 14 * 60;
+  late DateTime? _day = widget.day;
+  late int? _start = widget.draft == null
+      ? widget.task?.start ?? 14 * 60
+      : widget.draft!.start;
   late Timing _timing = widget.task?.timing ?? Timing.flexible;
   late final _after = {...?widget.task?.after};
   String? _error;
@@ -41,9 +69,10 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
   }
 
   Future<void> _pickTime() async {
+    final start = _start ?? 14 * 60;
     final time = await showTimePicker(
       context: context,
-      initialTime: TimeOfDay(hour: _start ~/ 60, minute: _start % 60),
+      initialTime: TimeOfDay(hour: start ~/ 60, minute: start % 60),
       initialEntryMode: TimePickerEntryMode.input,
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
@@ -55,15 +84,27 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
     }
   }
 
+  Future<void> _pickDay() async {
+    final day = await pickPlanDay(context, _day);
+    if (!mounted || day == null || day == _day) return;
+    setState(() {
+      _day = day;
+      _after.clear();
+      _error = null;
+    });
+  }
+
   Future<void> _change(Future<void> Function(PlanController) operation) async {
+    if (_saving) return;
+    final day = _day!;
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      await operation(ref.read(itineraryProvider.notifier));
+      await operation(ref.read(itineraryProvider(day).notifier));
       if (mounted && ModalRoute.of(context)?.isCurrent == true) {
-        Navigator.pop(context, true);
+        Navigator.pop(context, day);
       }
     } on FormatException catch (error) {
       if (mounted) setState(() => _error = error.message);
@@ -76,22 +117,42 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
 
   void _save() {
     if (!_form.currentState!.validate()) return;
+    final start = _start;
+    if (_day == null || start == null) {
+      setState(() => _error = _day == null ? '请选择行程日期。' : '请选择开始时间。');
+      return;
+    }
+    final draft = widget.draft;
     final task = ItineraryTask(
-      id: widget.task?.id ?? 'task-${DateTime.now().microsecondsSinceEpoch}',
+      id:
+          widget.task?.id ??
+          draft?.id ??
+          'task-${DateTime.now().microsecondsSinceEpoch}',
       title: _title.text.trim(),
-      start: _start,
+      start: start,
       duration: int.parse(_duration.text),
       location: _location.text.trim(),
       timing: _timing,
       transfer: _after.isEmpty ? 0 : int.parse(_transfer.text),
       after: _after,
     );
-    _change((controller) => controller.saveTask(task));
+    _change(
+      (controller) => draft == null
+          ? controller.saveTask(task)
+          : controller.addImportedTask(task),
+    );
   }
 
   Future<void> _delete() async {
     final task = widget.task!;
-    final used = widget.tasks.any((item) => item.after.contains(task.id));
+    final used =
+        ref
+            .read(itineraryProvider(_day!))
+            .asData
+            ?.value
+            .tasks
+            .any((item) => item.after.contains(task.id)) ==
+        true;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -133,10 +194,21 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
 
   @override
   Widget build(BuildContext context) {
-    final otherTasks = widget.tasks.where((task) => task.id != widget.task?.id);
+    final day = _day;
+    final plan = day == null ? null : ref.watch(itineraryProvider(day));
+    final otherTasks = (plan?.asData?.value.tasks ?? const <ItineraryTask>[])
+        .where((task) => task.id != widget.task?.id);
+    final draft = widget.draft;
+    final start = _start;
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.task == null ? '添加行程' : '编辑行程'),
+        title: Text(
+          draft != null
+              ? '加入行程'
+              : widget.task == null
+              ? '添加行程'
+              : '编辑行程',
+        ),
         actions: [
           if (widget.task != null)
             IconButton(
@@ -159,7 +231,12 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
                   children: [
                     TextFormField(
                       controller: _title,
-                      maxLength: 48,
+                      maxLength: max(
+                        48,
+                        (draft?.title ?? widget.task?.title ?? '')
+                            .characters
+                            .length,
+                      ),
                       decoration: const InputDecoration(labelText: '行程名称'),
                       validator: (value) =>
                           value == null || value.trim().isEmpty
@@ -169,14 +246,29 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _location,
-                      maxLength: 64,
+                      maxLength: max(
+                        64,
+                        (draft?.location ?? widget.task?.location ?? '')
+                            .characters
+                            .length,
+                      ),
                       decoration: const InputDecoration(labelText: '地点（选填）'),
                     ),
                     const SizedBox(height: 8),
+                    if (draft != null) ...[
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : _pickDay,
+                        icon: const Icon(Icons.calendar_today_outlined),
+                        label: Text(day == null ? '选择日期' : planDayLabel(day)),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     OutlinedButton.icon(
                       onPressed: _saving ? null : _pickTime,
                       icon: const Icon(Icons.schedule),
-                      label: Text('开始时间　${clockTime(_start)}'),
+                      label: Text(
+                        start == null ? '选择开始时间' : '开始时间　${clockTime(start)}',
+                      ),
                     ),
                     const SizedBox(height: 16),
                     _minutes('时长', _duration),
@@ -237,8 +329,19 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
                       ),
                     ],
                     const SizedBox(height: 24),
+                    if (plan?.hasError == true)
+                      TextButton(
+                        onPressed: () =>
+                            ref.invalidate(itineraryProvider(day!)),
+                        child: const Text('重新读取这一天的行程'),
+                      ),
                     FilledButton(
-                      onPressed: _saving ? null : _save,
+                      onPressed:
+                          _saving ||
+                              plan?.isLoading == true ||
+                              plan?.hasError == true
+                          ? null
+                          : _save,
                       child: Text(_saving ? '正在保存…' : '保存行程'),
                     ),
                   ],

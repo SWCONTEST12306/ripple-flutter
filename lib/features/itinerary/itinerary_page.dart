@@ -1,7 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../notifications/notification_inbox_page.dart';
+import 'day_picker.dart';
 import 'itinerary.dart';
 import 'plan_controller.dart';
 import 'review_page.dart';
@@ -18,11 +21,12 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   bool _working = false;
   bool _scrolling = false;
   int _destinationIndex = 0;
+  DateTime _day = planDay(DateTime.now());
 
   Future<void> _change(Future<void> Function(PlanController) operation) async {
     setState(() => _working = true);
     try {
-      await operation(ref.read(itineraryProvider.notifier));
+      await operation(ref.read(itineraryProvider(_day).notifier));
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -38,17 +42,20 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     }
   }
 
-  void _edit(SavedPlan plan, [ItineraryTask? task]) => Navigator.of(context)
-      .push<bool>(
-        MaterialPageRoute(
-          builder: (_) => TaskEditor(tasks: plan.tasks, task: task),
-        ),
-      );
+  void _edit([ItineraryTask? task]) {
+    final day = _day;
+    Navigator.of(context).push<DateTime>(
+      MaterialPageRoute(
+        builder: (_) => TaskEditor(day: day, task: task),
+      ),
+    );
+  }
 
   void _review(SavedPlan plan, PlanAnalysis analysis) =>
       Navigator.of(context).push<void>(
         MaterialPageRoute(
           builder: (_) => ReviewPage(
+            day: _day,
             plan: plan,
             analysis: analysis,
             options: PlanController.planner.options(plan.tasks, analysis),
@@ -90,7 +97,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
         ? SystemUiOverlayStyle.light
         : SystemUiOverlayStyle.dark,
     child: ref
-        .watch(itineraryProvider)
+        .watch(itineraryProvider(_day))
         .when(
           loading: () => const Scaffold(
             body: Center(
@@ -104,7 +111,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
                 children: [
                   const Text('行程读取失败。'),
                   TextButton(
-                    onPressed: () => ref.invalidate(itineraryProvider),
+                    onPressed: () => ref.invalidate(itineraryProvider(_day)),
                     child: const Text('重试'),
                   ),
                 ],
@@ -127,13 +134,30 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
         if (!didPop) _selectDestination(0);
       },
       child: Scaffold(
+        appBar: _destinationIndex == 2
+            ? null
+            : AppBar(
+                toolbarHeight: 48,
+                title: TextButton.icon(
+                  onPressed: _working
+                      ? null
+                      : () async {
+                          final selected = await pickPlanDay(context, _day);
+                          if (mounted && selected != null) {
+                            setState(() => _day = selected);
+                          }
+                        },
+                  icon: const Icon(Icons.calendar_today_outlined),
+                  label: Text(planDayLabel(_day)),
+                ),
+              ),
         floatingActionButton: isSchedule
             ? _duringRest(
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: FloatingActionButton(
                     tooltip: '添加行程',
-                    onPressed: _working ? null : () => _edit(plan),
+                    onPressed: _working ? null : _edit,
                     child: const Icon(Icons.add),
                   ),
                 ),
@@ -142,28 +166,44 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
         bottomNavigationBar: NavigationBar(
           selectedIndex: _destinationIndex,
           onDestinationSelected: _selectDestination,
-          destinations: const [
-            NavigationDestination(
+          destinations: [
+            const NavigationDestination(
               icon: Icon(Icons.calendar_today_outlined),
               selectedIcon: Icon(Icons.calendar_today),
               label: '日程',
             ),
-            NavigationDestination(
+            const NavigationDestination(
               icon: Icon(Icons.account_tree_outlined),
               selectedIcon: Icon(Icons.account_tree),
               label: '关系',
             ),
+            if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+              const NavigationDestination(
+                icon: Icon(Icons.notifications_outlined),
+                selectedIcon: Icon(Icons.notifications),
+                label: '通知',
+              ),
           ],
         ),
         body: SafeArea(
           bottom: false,
-          child: isSchedule
-              ? _schedule(
-                  plan,
-                  PlanController.planner.analyze(plan.tasks),
-                  sideInset,
-                )
-              : _relationships(plan, sideInset),
+          child: switch (_destinationIndex) {
+            0 => _schedule(
+              plan,
+              PlanController.planner.analyze(plan.tasks),
+              sideInset,
+            ),
+            1 => _relationships(plan, sideInset),
+            _ => NotificationInboxPage(
+              onViewPlan: (day) {
+                setState(() {
+                  _day = day;
+                  _destinationIndex = 0;
+                  _scrolling = false;
+                });
+              },
+            ),
+          },
         ),
       ),
     );
@@ -271,7 +311,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
                   conflicts: impacts[task.id] ?? const [],
                   first: index == 0,
                   last: index == tasks.length - 1,
-                  onPressed: _working ? null : () => _edit(plan, task),
+                  onPressed: _working ? null : () => _edit(task),
                 );
               },
             ),
@@ -313,7 +353,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
                 '${task.transfer > 0 ? '\n预留 ${task.transfer} 分钟转场' : ''}',
               ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: _working ? null : () => _edit(plan, task),
+              onTap: _working ? null : () => _edit(task),
             ),
           ),
       ],
