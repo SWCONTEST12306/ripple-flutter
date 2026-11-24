@@ -1,9 +1,6 @@
-import 'dart:async';
-
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
-import 'notification_inbox.dart';
 import 'notification_model.dart';
 
 class NotificationModelPage extends StatefulWidget {
@@ -18,10 +15,6 @@ class _NotificationModelPageState extends State<NotificationModelPage> {
   final _url = TextEditingController(text: NotificationModel.defaultUrl);
   final _model = TextEditingController(text: NotificationModel.defaultModel);
   final _credential = TextEditingController();
-  final _selected = <String, String>{};
-  Map<String, String> _available = {};
-  late final StreamSubscription<dynamic> _changes;
-  late final AppLifecycleListener _lifecycle;
   NotificationModel? _saved;
   bool _loading = true;
   bool _working = false;
@@ -30,10 +23,7 @@ class _NotificationModelPageState extends State<NotificationModelPage> {
   @override
   void initState() {
     super.initState();
-    _changes = NotificationInbox.changes.listen((_) => _refreshSources());
-    _lifecycle = AppLifecycleListener(onResume: _refreshSources);
     _load();
-    _refreshSources();
   }
 
   @override
@@ -41,8 +31,6 @@ class _NotificationModelPageState extends State<NotificationModelPage> {
     _url.dispose();
     _model.dispose();
     _credential.dispose();
-    _changes.cancel();
-    _lifecycle.dispose();
     super.dispose();
   }
 
@@ -50,32 +38,22 @@ class _NotificationModelPageState extends State<NotificationModelPage> {
     try {
       final saved = await NotificationModel.read();
       if (!mounted) return;
-      _saved = saved;
-      if (saved != null) {
-        _url.text = saved.baseUrl.toString();
-        _model.text = saved.model;
-        _selected.addAll(saved.sources);
+      setState(() {
+        _saved = saved;
+        if (saved != null) {
+          _url.text = saved.baseUrl.toString();
+          _model.text = saved.model;
+        }
+        _loading = false;
+        _error = null;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = '读取模型配置失败，可重新填写密钥后保存。';
+        });
       }
-    } catch (_) {
-      if (mounted) _error = '读取模型配置失败，可重新填写密钥后保存。';
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _refreshSources() async {
-    try {
-      final inbox = await NotificationInbox.read();
-      if (!mounted) return;
-      setState(
-        () => _available = {
-          for (final notice in inbox.entries.reversed)
-            if (notice.packageName.isNotEmpty)
-              notice.packageName: notice.source,
-        },
-      );
-    } catch (_) {
-      // Stored source selections remain available when the inbox is unavailable.
     }
   }
 
@@ -108,7 +86,6 @@ class _NotificationModelPageState extends State<NotificationModelPage> {
     final config = NotificationModel(
       NotificationModel.parseUrl(_url.text)!,
       _model.text.trim(),
-      sources: Map.of(_selected),
     );
     final credential = _credential.text.trim();
     _change(() => config.save(credential.isEmpty ? null : credential));
@@ -143,7 +120,7 @@ class _NotificationModelPageState extends State<NotificationModelPage> {
                     child: ListView(
                       padding: const EdgeInsets.all(16),
                       children: [
-                        const Text('手机联网后可直接调用模型服务。API 密钥加密保存在本机。'),
+                        const Text('新通知会立即发送到模型服务解析。API 密钥加密保存在本机。'),
                         const SizedBox(height: 20),
                         TextFormField(
                           controller: _url,
@@ -191,39 +168,11 @@ class _NotificationModelPageState extends State<NotificationModelPage> {
                           ),
                           validator: _validateCredential,
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 12),
                         Text(
-                          '自动提取来源',
-                          style: Theme.of(context).textTheme.titleMedium,
+                          '要读取的应用在「设置 · 允许读取通知的应用」中开关。',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        const SizedBox(height: 6),
-                        const Text('选中的应用发来新通知时，涟漪会将通知内容发送到上方模型服务。'),
-                        if (_available.isEmpty && _selected.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 8),
-                            child: Text('开启通知读取权限并收到通知后，可在这里选择应用。'),
-                          ),
-                        for (final source in {
-                          ..._selected,
-                          ..._available,
-                        }.entries)
-                          CheckboxListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(source.value),
-                            subtitle: source.key == source.value
-                                ? null
-                                : Text(source.key),
-                            value: _selected.containsKey(source.key),
-                            onChanged: _working
-                                ? null
-                                : (value) => setState(() {
-                                    if (value == true) {
-                                      _selected[source.key] = source.value;
-                                    } else {
-                                      _selected.remove(source.key);
-                                    }
-                                  }),
-                          ),
                         if (_error case final error?) ...[
                           const SizedBox(height: 12),
                           Semantics(

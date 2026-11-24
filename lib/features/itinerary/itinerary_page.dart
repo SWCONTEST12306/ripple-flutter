@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
-import '../notifications/notification_inbox_page.dart';
+import '../notifications/notification_import.dart';
+import '../notifications/notification_inbox.dart';
+import '../notifications/notification_review_dialog.dart';
+import '../settings/settings_page.dart';
 import 'day_picker.dart';
 import 'itinerary.dart';
 import 'plan_controller.dart';
@@ -22,6 +27,78 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   bool _scrolling = false;
   int _destinationIndex = 0;
   DateTime _day = planDay(DateTime.now());
+  AppLifecycleListener? _notificationLifecycle;
+  StreamSubscription<dynamic>? _notificationChanges;
+  bool _syncingNotifications = false;
+  bool _reviewingNotifications = false;
+
+  bool get _notificationsAvailable =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!_notificationsAvailable) return;
+    _notificationLifecycle = AppLifecycleListener(
+      onResume: () => _syncNotifications(review: true),
+    );
+    _notificationChanges = NotificationInbox.changes.listen(
+      (_) => _syncNotifications(),
+      onError: (Object _) => _syncNotifications(),
+    );
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _syncNotifications(review: true),
+    );
+  }
+
+  @override
+  void dispose() {
+    _notificationChanges?.cancel();
+    _notificationLifecycle?.dispose();
+    super.dispose();
+  }
+
+  /// Adds newly parsed notification events to the itinerary right away, and
+  /// asks about repeated notifications that no longer match the schedule.
+  Future<void> _syncNotifications({bool review = false}) async {
+    if (!_notificationsAvailable || _syncingNotifications) return;
+    _syncingNotifications = true;
+    try {
+      final importer = ref.read(notificationImporterProvider);
+      var reminders = 0;
+      try {
+        reminders = (await importer.sync()).reminders;
+      } catch (_) {
+        // 读取通知或写入行程失败时保持现状，下次再试。
+      }
+      if ((review || reminders > 0) && mounted) await _reviewImports();
+    } catch (_) {
+      // 弹窗失败时不影响日程使用。
+    } finally {
+      _syncingNotifications = false;
+    }
+  }
+
+  /// Asks once per app start which automatic additions should stay.
+  Future<void> _reviewImports() async {
+    if (_reviewingNotifications || !mounted) return;
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    final importer = ref.read(notificationImporterProvider);
+    final pending = await importer.pending();
+    if (pending.isEmpty || !mounted) return;
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    _reviewingNotifications = true;
+    try {
+      final decisions = await showDialog<Map<String, ImportDecision>>(
+        context: context,
+        builder: (_) => NotificationReviewDialog(items: pending),
+      );
+      if (decisions == null) return;
+      await importer.resolve(pending, decisions);
+    } finally {
+      _reviewingNotifications = false;
+    }
+  }
 
   Future<void> _change(Future<void> Function(PlanController) operation) async {
     setState(() => _working = true);
@@ -134,11 +211,11 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
         if (!didPop) _selectDestination(0);
       },
       child: Scaffold(
-        appBar: _destinationIndex == 2
-            ? null
-            : AppBar(
-                toolbarHeight: 48,
-                title: TextButton.icon(
+        appBar: AppBar(
+          toolbarHeight: 48,
+          title: _destinationIndex == 2
+              ? const Text('设置')
+              : TextButton.icon(
                   onPressed: _working
                       ? null
                       : () async {
@@ -150,7 +227,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
                   icon: const Icon(Icons.calendar_today_outlined),
                   label: Text(planDayLabel(_day)),
                 ),
-              ),
+        ),
         floatingActionButton: isSchedule
             ? _duringRest(
                 Padding(
@@ -179,9 +256,9 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
             ),
             if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
               const NavigationDestination(
-                icon: Icon(Icons.notifications_outlined),
-                selectedIcon: Icon(Icons.notifications),
-                label: '通知',
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: '设置',
               ),
           ],
         ),
@@ -194,7 +271,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
               sideInset,
             ),
             1 => _relationships(plan, sideInset),
-            _ => NotificationInboxPage(
+            _ => SettingsPage(
               onViewPlan: (day) {
                 setState(() {
                   _day = day;

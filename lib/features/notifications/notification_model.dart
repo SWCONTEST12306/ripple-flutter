@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 
 class NotificationModel {
-  const NotificationModel(this.baseUrl, this.model, {this.sources = const {}});
+  const NotificationModel(this.baseUrl, this.model);
 
   static const defaultUrl = 'https://api.deepseek.com';
   static const defaultModel = 'deepseek-flash';
@@ -9,7 +9,6 @@ class NotificationModel {
 
   final Uri baseUrl;
   final String model;
-  final Map<String, String> sources;
 
   static Uri? parseUrl(String value) {
     final text = value.trim();
@@ -32,17 +31,12 @@ class NotificationModel {
     if (saved == null) return null;
     final url = parseUrl(saved['url'] as String);
     if (url == null) throw const FormatException('请重新填写模型服务地址。');
-    return NotificationModel(
-      url,
-      saved['model'] as String,
-      sources: Map<String, String>.from(saved['sources'] as Map? ?? const {}),
-    );
+    return NotificationModel(url, saved['model'] as String);
   }
 
   Future<void> save(String? credential) => _channel.invokeMethod('save', {
     'url': baseUrl.toString(),
     'model': model,
-    'sources': sources,
     'credential': ?credential,
   });
 

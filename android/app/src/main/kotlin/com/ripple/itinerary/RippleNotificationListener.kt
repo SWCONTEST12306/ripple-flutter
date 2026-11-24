@@ -182,14 +182,22 @@ internal object NotificationInbox {
 
     fun store(context: Context, incoming: List<NotificationEntry>, signal: Boolean = false) {
         worker.execute {
+            val sources = runCatching { NotificationSources.current(context) }.getOrNull()
             var changed = signal
+            // The same notification can be posted again unchanged, for example
+            // when a chat app repeats a message. Flutter still has to look at it
+            // because the user may have edited the imported event meanwhile.
+            var repeated = false
             try {
                 changed = update(context) { current ->
                     val entries = current.associateByTo(mutableMapOf()) { it.notice.key }
                     for (entry in incoming) {
+                        if (sources?.records(entry) != true) continue
                         val previous = entries[entry.key]?.notice
                         if (previous == null || (entry != previous && entry.postedAt >= previous.postedAt)) {
                             entries[entry.key] = NotificationRecord(entry)
+                        } else if (entry == previous) {
+                            repeated = true
                         }
                     }
                     entries.values
@@ -197,7 +205,7 @@ internal object NotificationInbox {
             } catch (_: IOException) {
                 changed = true
             }
-            if (changed) notifyObservers()
+            if (changed || repeated) notifyObservers()
             NotificationExtractor.wake(context)
         }
     }
@@ -208,10 +216,12 @@ internal object NotificationInbox {
                 val authorized = hasAccess(context)
                 val entries = records(context)
                 val settings = runCatching { ModelSettings.current(context) }.getOrNull()
+                val sources = runCatching { NotificationSources.current(context) }.getOrNull()
                 main.post {
                     result.success(mapOf("authorized" to authorized, "entries" to entries.map {
                         it.toMap() + mapOf(
-                            "automatic" to (settings?.allows(it.notice) == true),
+                            "automatic" to (settings != null && sources?.analyzes(it.notice) == true),
+                            "sensitive" to it.notice.sensitive,
                             "retrying" to (it.error != null && it.retryAt != Long.MAX_VALUE),
                         )
                     }))
