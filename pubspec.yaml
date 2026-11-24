@@ -1,0 +1,29 @@
+name: ripple_app
+description: 涟漪行程冲突分析与调整
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  dynamic_color: ^2.1.0
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^3.3.1
+  material_ui: ^1.11.1
+  shared_preferences: ^2.5.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - path: assets/NotoSansSC-Subset.ttf
+      platforms: [web]
+    - path: assets/OFL.txt
+      platforms: [web]
+
