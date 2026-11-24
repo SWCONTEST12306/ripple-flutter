@@ -22,31 +22,19 @@ internal object ModelSettings {
     private const val KEY_ALIAS = "ripple.notification-model.v1"
     private const val IV_SIZE = 12
 
-    data class Source(val name: String, val since: Long)
-
     data class Configuration(
         val url: String,
         val model: String,
         val credential: String,
-        val sources: Map<String, Source>,
-    ) {
-        fun allows(entry: NotificationEntry): Boolean {
-            val source = sources[entry.packageName] ?: return false
-            return entry.postedAt >= source.since && !entry.sensitive
-        }
+    )
+
+    @Synchronized
+    fun current(context: Context): Configuration? = raw(context)?.let { saved ->
+        Configuration(saved.getString("url"), saved.getString("model"), saved.getString("credential"))
     }
 
     @Synchronized
-    fun current(context: Context): Configuration? = read(file(context))?.let { saved ->
-        val sources = saved.optJSONObject("sources") ?: JSONObject()
-        Configuration(
-            saved.getString("url"), saved.getString("model"), saved.getString("credential"),
-            sources.keys().asSequence().associateWith { id ->
-                val source = sources.getJSONObject(id)
-                Source(source.getString("name"), source.getLong("since"))
-            },
-        )
-    }
+    fun raw(context: Context): JSONObject? = read(file(context))
 
     fun register(context: Context, messenger: BinaryMessenger): MethodChannel = MethodChannel(
         messenger,
@@ -69,9 +57,7 @@ internal object ModelSettings {
         when (call.method) {
             "read" -> {
                 val saved = current(context)
-                result.success(saved?.let {
-                    mapOf("url" to it.url, "model" to it.model, "sources" to it.sources.mapValues { (_, source) -> source.name })
-                })
+                result.success(saved?.let { mapOf("url" to it.url, "model" to it.model) })
             }
             "save" -> {
                 val url = call.argument<String>("url")!!
@@ -83,14 +69,8 @@ internal object ModelSettings {
                     result.error("credential_required", null, null)
                     return
                 }
-                val now = System.currentTimeMillis()
-                val previousSources = previous?.takeIf { it.url == url }?.sources.orEmpty()
-                val selected = call.argument<Map<String, String>>("sources").orEmpty()
-                val sources = selected.mapValues { (id, name) ->
-                    JSONObject(mapOf("name" to name, "since" to (previousSources[id]?.since ?: now)))
-                }
                 write(file, JSONObject(mapOf(
-                    "url" to url, "model" to model, "credential" to credential, "sources" to JSONObject(sources),
+                    "url" to url, "model" to model, "credential" to credential,
                 )))
                 NotificationInbox.settingsChanged(context, retryFailures = previous?.let {
                     it.url == url && (it.credential != credential || it.model != model)

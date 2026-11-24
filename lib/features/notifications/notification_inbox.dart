@@ -14,6 +14,7 @@ class AndroidNotice {
       postedAt = map['postedAt'] as int,
       utcOffsetMinutes = map['utcOffsetMinutes'] as int,
       automatic = map['automatic'] == true,
+      sensitive = map['sensitive'] == true,
       retrying = map['retrying'] == true,
       error = map['error'] as String? ?? '',
       analysis = _parseAnalysis(map['analysis'] as String?);
@@ -26,6 +27,7 @@ class AndroidNotice {
   final int postedAt;
   final int utcOffsetMinutes;
   final bool automatic;
+  final bool sensitive;
   final bool retrying;
   final String error;
   final NotificationAnalysis? analysis;

@@ -182,11 +182,13 @@ internal object NotificationInbox {
 
     fun store(context: Context, incoming: List<NotificationEntry>, signal: Boolean = false) {
         worker.execute {
+            val sources = runCatching { NotificationSources.current(context) }.getOrNull()
             var changed = signal
             try {
                 changed = update(context) { current ->
                     val entries = current.associateByTo(mutableMapOf()) { it.notice.key }
                     for (entry in incoming) {
+                        if (sources?.records(entry) != true) continue
                         val previous = entries[entry.key]?.notice
                         if (previous == null || (entry != previous && entry.postedAt >= previous.postedAt)) {
                             entries[entry.key] = NotificationRecord(entry)
@@ -208,10 +210,12 @@ internal object NotificationInbox {
                 val authorized = hasAccess(context)
                 val entries = records(context)
                 val settings = runCatching { ModelSettings.current(context) }.getOrNull()
+                val sources = runCatching { NotificationSources.current(context) }.getOrNull()
                 main.post {
                     result.success(mapOf("authorized" to authorized, "entries" to entries.map {
                         it.toMap() + mapOf(
-                            "automatic" to (settings?.allows(it.notice) == true),
+                            "automatic" to (settings != null && sources?.analyzes(it.notice) == true),
+                            "sensitive" to it.notice.sensitive,
                             "retrying" to (it.error != null && it.retryAt != Long.MAX_VALUE),
                         )
                     }))

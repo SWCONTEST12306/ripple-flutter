@@ -86,37 +86,14 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
   );
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 640),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '通知',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                ),
-                IconButton(
-                  onPressed: () => _openModelSettings(context),
-                  tooltip: 'AI 模型设置',
-                  icon: const Icon(Icons.auto_awesome_outlined),
-                ),
-                if (_inbox.value?.authorized == true)
-                  IconButton(
-                    onPressed: _openSettings,
-                    tooltip: '通知读取设置',
-                    icon: const Icon(Icons.settings_outlined),
-                  ),
-              ],
-            ),
-          ),
-          Expanded(child: _content()),
-        ],
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('最近通知')),
+    body: SafeArea(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: _content(),
+        ),
       ),
     ),
   );
@@ -134,7 +111,7 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
     }
     if (!inbox.authorized) {
       return _empty(
-        '开启系统通知读取权限后，可以查看通知并配置自动提取来源。',
+        '开启系统通知读取权限后，可以查看最近的通知。',
         action: FilledButton(
           onPressed: _openSettings,
           child: const Text('开启通知读取权限'),
@@ -152,8 +129,8 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
           if (entries.isEmpty) {
             return const ListTile(
               leading: Icon(Icons.notifications_none),
-              title: Text('暂无通知'),
-              subtitle: Text('收到系统通知后会在这里显示。'),
+              title: Text('还没有读取到通知'),
+              subtitle: Text('在设置中打开需要读取的应用后，收到的新通知会显示在这里。'),
             );
           }
           final notice = entries[index];
@@ -170,9 +147,11 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
                   '${notice.source} · ${_postedAt(notice)}',
                   if (result != null)
                     result.summary
-                  else if (notice.automatic)
-                    _extractionStatus(notice)
-                  else if (notice.title.isNotEmpty && notice.text.isNotEmpty)
+                  else
+                    _extractionStatus(notice),
+                  if (result == null &&
+                      !notice.sensitive &&
+                      notice.text.isNotEmpty)
                     notice.text,
                 ].join('\n'),
                 maxLines: 3,
@@ -250,7 +229,7 @@ class _NotificationDetailState extends State<_NotificationDetail> {
   }
 
   void _viewPlan(DateTime day) {
-    Navigator.of(context).pop();
+    Navigator.of(context).popUntil((route) => route.isFirst);
     widget.onViewPlan(day);
   }
 
@@ -299,12 +278,12 @@ class _NotificationDetailState extends State<_NotificationDetail> {
                 liveRegion: true,
                 child: Text(_extractionStatus(notice)),
               ),
-              if (!notice.automatic)
+              if (!notice.automatic && !notice.sensitive)
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton(
                     onPressed: () => _openModelSettings(context),
-                    child: const Text('设置自动提取来源'),
+                    child: const Text('打开 AI 模型设置'),
                   ),
                 ),
             ],
@@ -366,9 +345,10 @@ class _NotificationDetailState extends State<_NotificationDetail> {
 }
 
 String _extractionStatus(AndroidNotice notice) {
-  if (!notice.automatic) return '这条通知保存在本机。';
+  if (notice.sensitive) return '包含验证码，这条通知只保存在本机。';
+  if (!notice.automatic) return '尚未解析，检查通知读取开关和 AI 模型设置。';
   if (notice.retrying) return '${notice.error} 稍后会自动重试。';
-  return notice.error.isNotEmpty ? notice.error : '等待自动提取';
+  return notice.error.isNotEmpty ? notice.error : '正在用 AI 解析…';
 }
 
 class _EventCard extends StatelessWidget {

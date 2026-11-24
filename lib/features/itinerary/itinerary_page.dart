@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
-import '../notifications/notification_inbox_page.dart';
+import '../settings/settings_page.dart';
 import 'day_picker.dart';
 import 'itinerary.dart';
 import 'plan_controller.dart';
@@ -134,11 +134,11 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
         if (!didPop) _selectDestination(0);
       },
       child: Scaffold(
-        appBar: _destinationIndex == 2
-            ? null
-            : AppBar(
-                toolbarHeight: 48,
-                title: TextButton.icon(
+        appBar: AppBar(
+          toolbarHeight: 48,
+          title: _destinationIndex == 2
+              ? const Text('设置')
+              : TextButton.icon(
                   onPressed: _working
                       ? null
                       : () async {
@@ -150,7 +150,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
                   icon: const Icon(Icons.calendar_today_outlined),
                   label: Text(planDayLabel(_day)),
                 ),
-              ),
+        ),
         floatingActionButton: isSchedule
             ? _duringRest(
                 Padding(
@@ -179,9 +179,9 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
             ),
             if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
               const NavigationDestination(
-                icon: Icon(Icons.notifications_outlined),
-                selectedIcon: Icon(Icons.notifications),
-                label: '通知',
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: '设置',
               ),
           ],
         ),
@@ -194,7 +194,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
               sideInset,
             ),
             1 => _relationships(plan, sideInset),
-            _ => NotificationInboxPage(
+            _ => SettingsPage(
               onViewPlan: (day) {
                 setState(() {
                   _day = day;

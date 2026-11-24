@@ -42,17 +42,20 @@ internal object NotificationExtractor {
 
     private fun drain(context: Context) {
         val config = runCatching { ModelSettings.current(context) }.getOrNull() ?: return
-        if (config.sources.isEmpty() || !NotificationInbox.hasAccess(context)) return
+        val sources = runCatching { NotificationSources.current(context) }.getOrNull() ?: return
+        if (!sources.master || sources.apps.isEmpty() || !NotificationInbox.hasAccess(context)) return
         if (context.getSystemService(ConnectivityManager::class.java).activeNetwork == null) return
         val records = runCatching { NotificationInbox.records(context) }.getOrNull() ?: return
-        val pending = records.filter { it.analysis == null && it.retryAt != Long.MAX_VALUE && config.allows(it.notice) }
+        val pending = records.filter {
+            it.analysis == null && it.retryAt != Long.MAX_VALUE && sources.analyzes(it.notice)
+        }
         val now = System.currentTimeMillis()
         val record = pending.firstOrNull { it.retryAt <= now }
         if (record == null) {
             pending.minOfOrNull { it.retryAt }?.let { schedule(context, (it - now).coerceAtLeast(0)) }
             return
         }
-        if (!isCurrent(context, config, record.notice)) {
+        if (!isCurrent(context, config, sources, record.notice)) {
             wake(context)
             return
         }
@@ -65,18 +68,26 @@ internal object NotificationExtractor {
         } catch (_: Exception) {
             failed(record, "模型返回的事件格式有误。", retry = false)
         }
-        if (isCurrent(context, config, record.notice)) {
+        if (isCurrent(context, config, sources, record.notice)) {
             val saved = runCatching { NotificationInbox.complete(context, record, updated) }
             if (saved.isFailure) return
         }
         wake(context)
     }
 
-    private fun isCurrent(context: Context, used: ModelSettings.Configuration, notice: NotificationEntry): Boolean {
+    private fun isCurrent(
+        context: Context,
+        used: ModelSettings.Configuration,
+        sources: NotificationSources.Configuration,
+        notice: NotificationEntry,
+    ): Boolean {
         if (!NotificationInbox.hasAccess(context)) return false
         val current = runCatching { ModelSettings.current(context) }.getOrNull() ?: return false
+        val currentSources = runCatching { NotificationSources.current(context) }.getOrNull() ?: return false
         return current.url == used.url && current.model == used.model && current.credential == used.credential &&
-            current.sources[notice.packageName] == used.sources[notice.packageName] && current.allows(notice)
+            currentSources.master == sources.master &&
+            currentSources.apps[notice.packageName] == sources.apps[notice.packageName] &&
+            currentSources.analyzes(notice)
     }
 
     private fun failed(record: NotificationRecord, message: String, retry: Boolean): NotificationRecord {
