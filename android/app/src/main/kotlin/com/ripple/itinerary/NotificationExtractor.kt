@@ -118,6 +118,11 @@ internal object NotificationExtractor {
             )))
         }.toString()
         logRequest(context, config, notice, endpoint.toString(), postedAt, payload)
+        if (DebugSettings.blockApi(context)) {
+            // 调试开关：提示词和参数已经写进日志，到此为止，不再发送请求。
+            // 由 drain() 把这个记录标记为不再重试，避免反复写同样的日志。
+            throw ExtractionFailure("调试模式：已生成请求日志，未发送模型请求。")
+        }
 
         val started = System.nanoTime()
         val bytes = payload.toByteArray(Charsets.UTF_8)

@@ -7,6 +7,7 @@ import '../notifications/notification_inbox_page.dart';
 import '../notifications/notification_model.dart';
 import '../notifications/notification_model_page.dart';
 import '../notifications/notification_sources.dart';
+import 'debug_settings.dart';
 import 'logs_page.dart';
 import 'notification_sources_page.dart';
 
@@ -25,6 +26,9 @@ class _SettingsPageState extends State<SettingsPage> {
   NotificationSources? _sources;
   NotificationInbox? _inbox;
   NotificationModel? _model;
+  bool _blockApi = false;
+  bool _savingDebug = false;
+  int _debugVersion = 0;
   int _version = 0;
   bool _loading = true;
   String? _error;
@@ -49,15 +53,18 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _load() async {
     final version = ++_version;
+    final debugVersion = _debugVersion;
     try {
       final sources = await NotificationSources.read();
       final inbox = await NotificationInbox.read();
       final model = await _readModel();
+      final blockApi = await _readDebugBlockApi();
       if (!mounted || version != _version) return;
       setState(() {
         _sources = sources;
         _inbox = inbox;
         _model = model;
+        if (debugVersion == _debugVersion) _blockApi = blockApi;
         _loading = false;
         _error = null;
       });
@@ -75,6 +82,58 @@ class _SettingsPageState extends State<SettingsPage> {
       return await NotificationModel.read();
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<bool> _readDebugBlockApi() async {
+    try {
+      return await DebugSettings.readBlockApi();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _setBlockApi(bool value) async {
+    if (_savingDebug) return;
+    final previous = _blockApi;
+    setState(() {
+      _blockApi = value;
+      _savingDebug = true;
+      _debugVersion++;
+    });
+    try {
+      await DebugSettings.saveBlockApi(value);
+      if (!mounted) return;
+      if (value) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            icon: const Icon(Icons.bug_report_outlined),
+            title: const Text('调试功能已开启'),
+            content: const Text(
+              '从现在起，通知解析和图片识别只会生成包含提示词和参数的本地日志，'
+              '不再发送模型请求，避免消耗 token。'
+              '已排队但尚未发送的请求也会被拦下；'
+              '关闭开关后，新收到的通知和新发起的图片识别恢复发送，已拦下的记录不会自动补发。',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('知道了'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _blockApi = previous);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('调试设置保存失败，请重试。')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _savingDebug = false);
     }
   }
 
@@ -210,12 +269,31 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 16),
               _section(theme, '开发'),
               Card.filled(
-                child: ListTile(
-                  leading: const Icon(Icons.receipt_long_outlined),
-                  title: const Text('日志'),
-                  subtitle: const Text('模型请求的提示词、参数和返回结果，只保存在本机'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _push(const LogsPage()),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SwitchListTile(
+                      secondary: Icon(
+                        _blockApi ? Icons.block : Icons.send_outlined,
+                      ),
+                      title: const Text('阻断 API 发送'),
+                      subtitle: Text(
+                        _blockApi
+                            ? '已开启：只生成请求日志，不发送模型请求'
+                            : '开启后只记录提示词和参数，不发送模型请求',
+                      ),
+                      value: _blockApi,
+                      onChanged: _savingDebug ? null : _setBlockApi,
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.receipt_long_outlined),
+                      title: const Text('日志'),
+                      subtitle: const Text('模型请求的提示词、参数和返回结果，只保存在本机'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => _push(const LogsPage()),
+                    ),
+                  ],
                 ),
               ),
             ],

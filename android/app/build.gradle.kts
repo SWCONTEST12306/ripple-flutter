@@ -43,6 +43,8 @@ dependencies {
     implementation("androidx.compose.foundation:foundation:1.10.3")
     implementation("androidx.compose.ui:ui:1.10.3")
     implementation("io.github.kyant0:backdrop:1.0.6")
+    // 本地中文 OCR（模型随 APK 打包，运行时不需要联网下载）。
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 }
 
 kotlin {

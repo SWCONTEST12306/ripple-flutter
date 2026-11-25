@@ -120,7 +120,10 @@ class _NotificationModelPageState extends State<NotificationModelPage> {
                     child: ListView(
                       padding: const EdgeInsets.all(16),
                       children: [
-                        const Text('新通知会立即发送到模型服务解析。API 密钥加密保存在本机。'),
+                        const Text(
+                          '新通知会立即发送到模型服务解析；图片识别也使用这里的配置。'
+                          'API 密钥加密保存在本机。',
+                        ),
                         const SizedBox(height: 20),
                         TextFormField(
                           controller: _url,

@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../image_schedule/image_schedule_channel.dart';
+import '../image_schedule/image_schedule_flow.dart';
 import '../notifications/notification_association.dart';
 import '../notifications/notification_import.dart';
 import '../notifications/notification_inbox.dart';
@@ -35,8 +37,17 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   bool _syncAgain = false;
   bool _reviewAfterSync = false;
   bool _reviewingNotifications = false;
+  StreamSubscription<dynamic>? _imageShares;
+  bool _imageChannelReady = false;
+  bool _preparingImageShares = false;
+  bool _imageBusy = false;
+  bool _imageAgain = false;
+  bool _addMenuOpen = false;
 
   bool get _notificationsAvailable =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  bool get _imageScheduleAvailable =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   @override
@@ -44,23 +55,39 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     super.initState();
     _appLifecycle = AppLifecycleListener(
       onShow: _returnToToday,
-      onResume: () => _syncNotifications(review: true),
+      onResume: _onResume,
     );
-    if (!_notificationsAvailable) return;
-    _notificationChanges = NotificationInbox.changes.listen(
-      (_) => _syncNotifications(),
-      onError: (Object _) => _syncNotifications(),
-    );
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _syncNotifications(review: true),
-    );
+    if (_notificationsAvailable) {
+      _notificationChanges = NotificationInbox.changes.listen(
+        (_) => _syncNotifications(),
+        onError: (Object _) => _syncNotifications(),
+      );
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _syncNotifications(review: true),
+      );
+    }
+    if (_imageScheduleAvailable) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _prepareImageShares(),
+      );
+    }
   }
 
   @override
   void dispose() {
     _notificationChanges?.cancel();
+    _imageShares?.cancel();
     _appLifecycle.dispose();
     super.dispose();
+  }
+
+  void _onResume() {
+    unawaited(_syncNotifications(review: true));
+    if (_imageChannelReady) {
+      unawaited(_takeSharedImage());
+    } else {
+      unawaited(_prepareImageShares());
+    }
   }
 
   void _returnToToday() {
@@ -69,6 +96,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     setState(() {
       _day = today;
       _scrolling = false;
+      _addMenuOpen = false;
     });
   }
 
@@ -147,6 +175,86 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     }
   }
 
+  /// Checks that the native image channel exists, then listens for shares.
+  /// Trying the method channel first also keeps environments without the
+  /// channel (tests, other platforms) from opening an EventChannel.
+  Future<void> _prepareImageShares() async {
+    if (!mounted ||
+        !_imageScheduleAvailable ||
+        _imageChannelReady ||
+        _preparingImageShares) {
+      return;
+    }
+    _preparingImageShares = true;
+    try {
+      final path = await ImageScheduleChannel.consumeShared();
+      if (!mounted) return;
+      _imageShares = ImageScheduleChannel.shares.listen(
+        (_) => _takeSharedImage(),
+        onError: (Object _) => _takeSharedImage(),
+      );
+      _imageChannelReady = true;
+      if (path != null) await _startImageSchedule(path: path);
+    } on ImageScheduleFailure {
+      // 原生通道不可用（例如测试环境），静默跳过分享入口。
+    } catch (_) {
+      // 初始化失败时不影响主页，下次回前台再试。
+    } finally {
+      _preparingImageShares = false;
+    }
+  }
+
+  /// Takes a share that was copied by the native side and starts parsing it.
+  Future<void> _takeSharedImage() async {
+    if (!mounted || !_imageScheduleAvailable || !_imageChannelReady) return;
+    if (_imageBusy) {
+      _imageAgain = true;
+      return;
+    }
+    String? path;
+    try {
+      path = await ImageScheduleChannel.consumeShared();
+    } on ImageScheduleFailure {
+      return;
+    }
+    if (path == null || !mounted) return;
+    await _startImageSchedule(path: path);
+  }
+
+  Future<void> _startImageSchedule({String? path}) async {
+    if (!mounted) return;
+    if (_imageBusy) {
+      _imageAgain = true;
+      return;
+    }
+    _imageBusy = true;
+    _closeAddMenu();
+    try {
+      final day = await startImageScheduleFlow(context, ref, path: path);
+      if (day != null && mounted) {
+        _viewPlan(day);
+        unawaited(_syncNotifications());
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('图片识别失败，请重试。')));
+      }
+    } finally {
+      _imageBusy = false;
+      if (_imageAgain) {
+        _imageAgain = false;
+        unawaited(_takeSharedImage());
+      }
+    }
+  }
+
+  void _closeAddMenu() {
+    if (!_addMenuOpen) return;
+    setState(() => _addMenuOpen = false);
+  }
+
   Future<void> _change(Future<void> Function(PlanController) operation) async {
     setState(() => _working = true);
     try {
@@ -182,6 +290,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
       _day = planDay(day);
       _destinationIndex = 0;
       _scrolling = false;
+      _addMenuOpen = false;
     });
   }
 
@@ -213,8 +322,12 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
 
   bool _handleScroll(ScrollNotification notification) {
     if (notification.depth != 0) return false;
-    if (notification is ScrollStartNotification && !_scrolling) {
-      setState(() => _scrolling = true);
+    if (notification is ScrollStartNotification &&
+        (!_scrolling || _addMenuOpen)) {
+      setState(() {
+        _scrolling = true;
+        _addMenuOpen = false;
+      });
     }
     if (notification is ScrollEndNotification && _scrolling) {
       setState(() => _scrolling = false);
@@ -227,6 +340,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     setState(() {
       _destinationIndex = index;
       _scrolling = false;
+      _addMenuOpen = false;
     });
   }
 
@@ -237,6 +351,89 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     maintainAnimation: true,
     maintainSize: true,
     child: child,
+  );
+
+  /// On Android the plus button expands into two actions: create a task from
+  /// the form, or read an image. Other platforms keep the single add button.
+  Widget _addButton() {
+    if (!_imageScheduleAvailable) {
+      return FloatingActionButton(
+        heroTag: 'ripple-add',
+        tooltip: '添加行程',
+        onPressed: _working ? null : _edit,
+        child: const Icon(Icons.add),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (_addMenuOpen) ...[
+          _addMenuItem(
+            label: '图片识别日程',
+            icon: Icons.image_search,
+            onPressed: _working ? null : () {
+              _closeAddMenu();
+              unawaited(_startImageSchedule());
+            },
+          ),
+          const SizedBox(height: 12),
+          _addMenuItem(
+            label: '手动添加',
+            icon: Icons.edit_note,
+            onPressed: _working
+                ? null
+                : () {
+                    _closeAddMenu();
+                    _edit();
+                  },
+          ),
+          const SizedBox(height: 12),
+        ],
+        FloatingActionButton(
+          heroTag: 'ripple-add',
+          tooltip: _addMenuOpen ? '关闭添加菜单' : '添加行程',
+          onPressed: _working
+              ? null
+              : () => setState(() => _addMenuOpen = !_addMenuOpen),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 150),
+            child: Icon(
+              _addMenuOpen ? Icons.close : Icons.add,
+              key: ValueKey(_addMenuOpen),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _addMenuItem({
+    required String label,
+    required IconData icon,
+    required VoidCallback? onPressed,
+  }) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Card(
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+          ),
+        ),
+      ),
+      const SizedBox(width: 10),
+      FloatingActionButton.small(
+        heroTag: 'ripple-add-$label',
+        tooltip: label,
+        onPressed: onPressed,
+        child: Icon(icon),
+      ),
+    ],
   );
 
   @override
@@ -285,9 +482,14 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
             2 +
         16;
     return PopScope(
-      canPop: isSchedule,
+      canPop: isSchedule && !_addMenuOpen,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _selectDestination(0);
+        if (didPop) return;
+        if (_addMenuOpen) {
+          _closeAddMenu();
+          return;
+        }
+        _selectDestination(0);
       },
       child: Scaffold(
         appBar: AppBar(
@@ -309,6 +511,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
                   onPressed: _working
                       ? null
                       : () async {
+                          _closeAddMenu();
                           final selected = await pickPlanDay(context, _day);
                           if (mounted && selected != null) {
                             setState(() => _day = selected);
@@ -322,11 +525,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
             ? _duringRest(
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: FloatingActionButton(
-                    tooltip: '添加行程',
-                    onPressed: _working ? null : _edit,
-                    child: const Icon(Icons.add),
-                  ),
+                  child: _addButton(),
                 ),
               )
             : null,
@@ -352,17 +551,31 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
               ),
           ],
         ),
-        body: SafeArea(
-          bottom: false,
-          child: switch (_destinationIndex) {
-            0 => _schedule(
-              plan,
-              PlanController.planner.analyze(plan.tasks),
-              sideInset,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: SafeArea(
+                bottom: false,
+                child: switch (_destinationIndex) {
+                  0 => _schedule(
+                    plan,
+                    PlanController.planner.analyze(plan.tasks),
+                    sideInset,
+                  ),
+                  1 => _relationships(plan, sideInset),
+                  _ => SettingsPage(onViewPlan: _viewPlan),
+                },
+              ),
             ),
-            1 => _relationships(plan, sideInset),
-            _ => SettingsPage(onViewPlan: _viewPlan),
-          },
+            if (_addMenuOpen)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _closeAddMenu,
+                  child: const ColoredBox(color: Color(0x1A000000)),
+                ),
+              ),
+          ],
         ),
       ),
     );
