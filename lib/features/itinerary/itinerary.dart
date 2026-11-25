@@ -29,9 +29,11 @@ class ItineraryTask {
     required this.duration,
     required this.location,
     required this.timing,
+    Iterable<String> people = const [],
     this.transfer = 0,
     Iterable<String> after = const [],
-  }) : after = List.unmodifiable(after);
+  }) : people = List.unmodifiable(people),
+       after = List.unmodifiable(after);
 
   final String id;
   final String title;
@@ -39,6 +41,7 @@ class ItineraryTask {
   final int duration;
   final String location;
   final Timing timing;
+  final List<String> people;
   final int transfer;
   final List<String> after;
 
@@ -57,6 +60,7 @@ class ItineraryTask {
     duration: duration ?? this.duration,
     location: location ?? this.location,
     timing: timing,
+    people: people,
     transfer: transfer ?? this.transfer,
     after: after ?? this.after,
   );
@@ -68,6 +72,7 @@ class ItineraryTask {
     'duration': duration,
     'location': location,
     'timing': timing.name,
+    if (people.isNotEmpty) 'people': people,
     'transfer': transfer,
     'after': after,
   };
@@ -79,6 +84,7 @@ class ItineraryTask {
     duration: json['duration'] as int,
     location: json['location'] as String,
     timing: Timing.values.byName(json['timing'] as String),
+    people: (json['people'] as List?)?.cast<String>() ?? const [],
     transfer: json['transfer'] as int,
     after: (json['after'] as List).cast<String>(),
   );
@@ -134,6 +140,7 @@ class Planner {
       duration: 0,
       location: '地铁站 A 口',
       timing: Timing.flexible,
+      people: ['小明'],
     ),
     ItineraryTask(
       id: demoExhibition,

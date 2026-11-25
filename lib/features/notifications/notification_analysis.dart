@@ -33,6 +33,11 @@ class ExtractedEvent {
       delayMinutes = json['delay_minutes'] as int?,
       durationMinutes = json['duration_minutes'] as int?,
       location = json['location'] as String?,
+      originalLocation = json['original_location'] as String?,
+      people =
+          (json['people'] as List?)?.whereType<String>().toList() ?? const [],
+      activity = json['activity'] as String?,
+      tentative = json['tentative'] == true,
       reference = json['reference'] as String?,
       evidence = json['evidence'] as String;
 
@@ -45,6 +50,10 @@ class ExtractedEvent {
   final int? delayMinutes;
   final int? durationMinutes;
   final String? location;
+  final String? originalLocation;
+  final List<String> people;
+  final String? activity;
+  final bool tentative;
   final String? reference;
   final String evidence;
 }

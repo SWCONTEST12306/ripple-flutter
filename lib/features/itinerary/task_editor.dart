@@ -13,6 +13,7 @@ class TaskDraft {
     required this.id,
     required this.title,
     this.location,
+    this.people = const [],
     this.start,
     this.duration,
   });
@@ -20,6 +21,7 @@ class TaskDraft {
   final String id;
   final String title;
   final String? location;
+  final List<String> people;
   final int? start;
   final int? duration;
 }
@@ -43,6 +45,9 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
   late final _location = TextEditingController(
     text: widget.task?.location ?? widget.draft?.location,
   );
+  late final _people = TextEditingController(
+    text: widget.task?.people.join('、') ?? widget.draft?.people.join('、'),
+  );
   late final _duration = TextEditingController(
     text:
         '${widget.task?.duration ?? widget.draft?.duration ?? (widget.draft == null ? 30 : 0)}',
@@ -63,6 +68,7 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
   void dispose() {
     _title.dispose();
     _location.dispose();
+    _people.dispose();
     _duration.dispose();
     _transfer.dispose();
     super.dispose();
@@ -133,6 +139,11 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
       duration: int.parse(_duration.text),
       location: _location.text.trim(),
       timing: _timing,
+      people: _people.text
+          .split(RegExp(r'[、,，;；\n]'))
+          .map((name) => name.trim())
+          .where((name) => name.isNotEmpty)
+          .toSet(),
       transfer: _after.isEmpty ? 0 : int.parse(_transfer.text),
       after: _after,
     );
@@ -253,6 +264,21 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
                             .length,
                       ),
                       decoration: const InputDecoration(labelText: '地点（选填）'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _people,
+                      maxLength: max(
+                        100,
+                        (widget.task?.people ?? widget.draft?.people ?? [])
+                            .join('、')
+                            .characters
+                            .length,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: '参与人（选填）',
+                        hintText: '多人可用顿号分隔',
+                      ),
                     ),
                     const SizedBox(height: 8),
                     if (draft != null) ...[

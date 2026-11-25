@@ -3,23 +3,33 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../itinerary/day_picker.dart';
+import '../itinerary/itinerary.dart';
 import '../itinerary/plan_controller.dart';
 import '../itinerary/task_editor.dart';
 import 'notification_analysis.dart';
+import 'notification_association.dart';
 import 'notification_event.dart';
 import 'notification_inbox.dart';
 import 'notification_model_page.dart';
+import 'schedule_matcher.dart';
 
-class NotificationInboxPage extends StatefulWidget {
-  const NotificationInboxPage({super.key, required this.onViewPlan});
+class NotificationInboxPage extends ConsumerStatefulWidget {
+  const NotificationInboxPage({
+    super.key,
+    required this.onViewPlan,
+    this.associationsFirst = false,
+  });
 
   final ValueChanged<DateTime> onViewPlan;
+  final bool associationsFirst;
 
   @override
-  State<NotificationInboxPage> createState() => _NotificationInboxPageState();
+  ConsumerState<NotificationInboxPage> createState() =>
+      _NotificationInboxPageState();
 }
 
-class _NotificationInboxPageState extends State<NotificationInboxPage> {
+class _NotificationInboxPageState extends ConsumerState<NotificationInboxPage> {
   final _inbox = ValueNotifier<NotificationInbox?>(null);
   late final AppLifecycleListener _lifecycle;
   late final StreamSubscription<dynamic> _changes;
@@ -45,10 +55,11 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
     super.dispose();
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({bool match = false}) async {
     final version = ++_refreshVersion;
+    final NotificationInbox inbox;
     try {
-      final inbox = await NotificationInbox.read();
+      inbox = await NotificationInbox.read();
       if (!mounted || version != _refreshVersion) return;
       setState(() {
         _inbox.value = inbox;
@@ -60,6 +71,19 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
         _inbox.value = null;
         _error = '本机通知读取失败，请重试。';
       });
+      return;
+    }
+    if (match) {
+      try {
+        await ref
+            .read(notificationAssociationsProvider.notifier)
+            .refresh(inbox);
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('暂时无法更新关联，请重试。')));
+        }
+      }
     }
   }
 
@@ -117,9 +141,24 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
         ),
       );
     }
-    final entries = inbox.entries;
+    final links = ref.watch(notificationAssociationsProvider);
+    final statuses = {
+      for (final notice in inbox.entries)
+        notice.key: [
+          for (final event in notice.analysis?.events ?? <ExtractedEvent>[])
+            ?links[notificationTaskId(notice, event)],
+        ],
+    };
+    bool needsAttention(AndroidNotice notice) =>
+        statuses[notice.key]!.any((link) => link.needsAttention);
+    final entries = widget.associationsFirst
+        ? [
+            ...inbox.entries.where(needsAttention),
+            ...inbox.entries.where((notice) => !needsAttention(notice)),
+          ]
+        : inbox.entries;
     return RefreshIndicator(
-      onRefresh: _refresh,
+      onRefresh: () => _refresh(match: true),
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -134,6 +173,7 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
           }
           final notice = entries[index];
           final result = notice.analysis;
+          final status = statuses[notice.key]!;
           return Card.filled(
             child: ListTile(
               title: Text(
@@ -152,6 +192,12 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
                       !notice.sensitive &&
                       notice.text.isNotEmpty)
                     notice.text,
+                  if (status.any((link) => link.needsChoice))
+                    '待选择关联行程'
+                  else if (status.any((link) => link.alerts.isNotEmpty))
+                    '有关联行程需要核对'
+                  else if (status.any((link) => link.target != null))
+                    '已关联行程',
                 ].join('\n'),
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
@@ -203,10 +249,6 @@ class _NotificationDetailState extends State<_NotificationDetail> {
     if (_editing) return;
     _editing = true;
     try {
-      final time = event.time?.split(':');
-      final start = time == null
-          ? null
-          : int.parse(time[0]) * 60 + int.parse(time[1]);
       final saved = await Navigator.of(context).push<DateTime>(
         MaterialPageRoute(
           builder: (_) => TaskEditor(
@@ -215,7 +257,8 @@ class _NotificationDetailState extends State<_NotificationDetail> {
               id: id,
               title: event.title,
               location: event.location,
-              start: start,
+              people: event.people,
+              start: eventMinutes(event.time),
               duration: event.durationMinutes,
             ),
           ),
@@ -293,9 +336,9 @@ class _NotificationDetailState extends State<_NotificationDetail> {
               for (final event in result.events)
                 _EventCard(
                   event,
-                  action: event.kind == EventKind.cancelled
-                      ? null
-                      : _scheduleAction(notice, event),
+                  action: event.kind == EventKind.newEvent
+                      ? _scheduleAction(notice, event)
+                      : _associationAction(notice, event),
                 ),
             ],
           ],
@@ -307,19 +350,17 @@ class _NotificationDetailState extends State<_NotificationDetail> {
   Widget _scheduleAction(AndroidNotice notice, ExtractedEvent event) {
     final id = notificationTaskId(notice, event);
     final day =
-        _added[id] ??
-        DateTime.tryParse(event.date ?? '') ??
-        planDay(notice.localPostedAt);
+        _added[id] ?? eventDate(event.date) ?? planDay(notice.localPostedAt);
     return Consumer(
       builder: (context, ref, _) {
         final added =
             ref
-                    .watch(itineraryProvider(day))
-                    .asData
-                    ?.value
-                    .tasks
-                    .any((task) => task.id == id) ==
-                true;
+                .watch(itineraryProvider(day))
+                .asData
+                ?.value
+                .tasks
+                .any((task) => task.id == id) ==
+            true;
         return added
             ? TextButton.icon(
                 onPressed: () => _viewPlan(day),
@@ -334,6 +375,108 @@ class _NotificationDetailState extends State<_NotificationDetail> {
       },
     );
   }
+
+  Widget _associationAction(AndroidNotice notice, ExtractedEvent event) {
+    final id = notificationTaskId(notice, event);
+    return Consumer(
+      builder: (context, ref, _) {
+        final association = ref.watch(
+          notificationAssociationsProvider.select((links) => links[id]),
+        );
+        if (association == null) return const SizedBox.shrink();
+        final target = association.target;
+        if (target == null) {
+          if (association.needsChoice) {
+            return FilledButton.tonalIcon(
+              onPressed: () => _choose(ref, id, event, association.candidates),
+              icon: const Icon(Icons.link),
+              label: const Text('选择关联行程'),
+            );
+          }
+          return Text(association.dismissed ? '已忽略此关联' : '未找到相关行程');
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '已关联：${target.task.title}',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            Text(_candidateDetails(target)),
+            if (target.evidence.isNotEmpty) Text(target.evidence.join('、')),
+            if (association.alerts.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                '请核对行程',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+              for (final alert in association.alerts) Text(alert),
+            ],
+            TextButton.icon(
+              onPressed: () => _viewPlan(target.day),
+              icon: const Icon(Icons.event_outlined),
+              label: const Text('查看关联行程'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _choose(
+    WidgetRef ref,
+    String id,
+    ExtractedEvent event,
+    List<ScheduleCandidate> candidates,
+  ) async {
+    final choice = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('选择关联行程'),
+        children: [
+          for (final (index, candidate) in candidates.indexed)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, index),
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(candidate.task.title),
+                subtitle: Text(
+                  [
+                    _candidateDetails(candidate),
+                    ...candidate.evidence,
+                  ].join(' · '),
+                ),
+              ),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, -1),
+            child: const Text('忽略关联'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || choice == null) return;
+    try {
+      await ref
+          .read(notificationAssociationsProvider.notifier)
+          .choose(id, event, choice < 0 ? null : candidates[choice]);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is FormatException ? error.message : '保存关联失败，请重试。',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  String _candidateDetails(ScheduleCandidate candidate) => [
+    '${planDayLabel(candidate.day)} ${clockTime(candidate.task.start)}',
+    if (candidate.task.location.isNotEmpty) candidate.task.location,
+  ].join(' · ');
 }
 
 String _extractionStatus(AndroidNotice notice) {
@@ -377,8 +520,13 @@ class _EventCard extends StatelessWidget {
               const Text('时间待确认'),
             if (event.delayMinutes case final minutes?)
               Text('预计延后　$minutes 分钟'),
+            if (event.tentative ||
+                RegExp(r'可能|大概|不确定').hasMatch(event.evidence))
+              const Text('变动待确认'),
             if (event.durationMinutes case final minutes?)
               Text('时长　$minutes 分钟'),
+            if (event.originalLocation case final location?)
+              Text('原地点　$location'),
             if (event.location case final location?) Text('地点　$location'),
             if (event.reference case final reference?) Text('行程编号　$reference'),
             const SizedBox(height: 8),
