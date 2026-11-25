@@ -13,6 +13,7 @@ class MainActivity : FlutterFragmentActivity() {
     private var inboxEvents: EventChannel? = null
     private var modelChannel: MethodChannel? = null
     private var sourcesChannel: MethodChannel? = null
+    private var logChannel: MethodChannel? = null
     private var changed: (() -> Unit)? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -25,6 +26,7 @@ class MainActivity : FlutterFragmentActivity() {
         val messenger = flutterEngine.dartExecutor.binaryMessenger
         modelChannel = ModelSettings.register(applicationContext, messenger)
         sourcesChannel = NotificationSources.register(applicationContext, messenger)
+        logChannel = DiagnosticLog.register(applicationContext, messenger)
         inboxChannel = MethodChannel(messenger, "ripple/notifications").apply {
             setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -59,10 +61,12 @@ class MainActivity : FlutterFragmentActivity() {
         inboxEvents?.setStreamHandler(null)
         modelChannel?.setMethodCallHandler(null)
         sourcesChannel?.setMethodCallHandler(null)
+        logChannel?.setMethodCallHandler(null)
         inboxChannel = null
         inboxEvents = null
         modelChannel = null
         sourcesChannel = null
+        logChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 

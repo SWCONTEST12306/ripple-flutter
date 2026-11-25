@@ -7,6 +7,7 @@ import '../notifications/notification_inbox_page.dart';
 import '../notifications/notification_model.dart';
 import '../notifications/notification_model_page.dart';
 import '../notifications/notification_sources.dart';
+import 'logs_page.dart';
 import 'notification_sources_page.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -204,6 +205,17 @@ class _SettingsPageState extends State<SettingsPage> {
                   subtitle: Text(_modelSummary),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _push(const NotificationModelPage()),
+                ),
+              ),
+              const SizedBox(height: 16),
+              _section(theme, '开发'),
+              Card.filled(
+                child: ListTile(
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: const Text('日志'),
+                  subtitle: const Text('模型请求的提示词、参数和返回结果，只保存在本机'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _push(const LogsPage()),
                 ),
               ),
             ],
