@@ -8,7 +8,7 @@ import 'features/itinerary/itinerary_page.dart';
 
 const _webChineseFallback = 'Noto Sans SC';
 
-Future<void> main() async {
+Future<void> main() async { 
   WidgetsFlutterBinding.ensureInitialized();
   if (kIsWeb) {
     final font = FontLoader(_webChineseFallback)
