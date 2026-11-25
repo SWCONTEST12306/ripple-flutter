@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import '../itinerary/day_picker.dart';
 import '../itinerary/itinerary.dart';
 import '../itinerary/plan_controller.dart';
+import '../itinerary/review_page.dart';
 import '../itinerary/task_editor.dart';
 import 'notification_analysis.dart';
 import 'notification_association.dart';
@@ -197,6 +198,8 @@ class _NotificationInboxPageState extends ConsumerState<NotificationInboxPage> {
                     '待选择关联行程'
                   else if (status.any((link) => link.impact.needsAttention))
                     '有关联行程需要核对'
+                  else if (status.any((link) => link.applied))
+                    '已按此通知调整'
                   else if (status.any((link) => link.target != null))
                     '已关联行程',
                 ].join('\n'),
@@ -245,6 +248,7 @@ class _NotificationDetail extends StatefulWidget {
 class _NotificationDetailState extends State<_NotificationDetail> {
   final _added = <String, DateTime>{};
   bool _editing = false;
+  bool _reviewing = false;
 
   Future<void> _add(String id, ExtractedEvent event, DateTime? day) async {
     if (_editing) return;
@@ -387,6 +391,7 @@ class _NotificationDetailState extends State<_NotificationDetail> {
         if (association == null) return const SizedBox.shrink();
         final target = association.target;
         if (target == null) {
+          if (association.applied) return const Text('已按此通知调整');
           if (association.needsChoice) {
             return FilledButton.tonalIcon(
               onPressed: () => _choose(ref, id, event, association.candidates),
@@ -404,6 +409,7 @@ class _NotificationDetailState extends State<_NotificationDetail> {
               style: Theme.of(context).textTheme.titleSmall,
             ),
             Text(_candidateDetails(target)),
+            if (association.applied) const Text('已按此通知调整'),
             if (target.evidence.isNotEmpty) Text(target.evidence.join('、')),
             if (association.impact.alerts.isNotEmpty) ...[
               const SizedBox(height: 8),
@@ -418,12 +424,94 @@ class _NotificationDetailState extends State<_NotificationDetail> {
               icon: const Icon(Icons.event_outlined),
               label: const Text('查看关联行程'),
             ),
+            if (association.impact.replanningStart != null)
+              FilledButton.tonalIcon(
+                onPressed: () => _reviewReplanning(ref, id, event, target),
+                icon: const Icon(Icons.alt_route),
+                label: const Text('对比重规划方案'),
+              ),
             if (association.impact.steps.isNotEmpty)
               _ImpactPreview(association.impact.steps),
           ],
         );
       },
     );
+  }
+
+  Future<void> _reviewReplanning(
+    WidgetRef ref,
+    String id,
+    ExtractedEvent event,
+    ScheduleCandidate target,
+  ) async {
+    if (_reviewing) return;
+    _reviewing = true;
+    try {
+      final day = target.day;
+      final plan = await ref.read(itineraryProvider(day).future);
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+      final task = plan.tasks
+          .where((task) => task.id == target.task.id)
+          .firstOrNull;
+      if (plan.appliedNotices.contains(id)) {
+        throw const FormatException('这条通知的方案已应用。');
+      }
+      if (task == null) throw const FormatException('关联行程已更新，请刷新通知。');
+      final current = ScheduleCandidate(day, task, target.evidence);
+      final start = notificationImpact(
+        event,
+        current,
+        plan.tasks,
+      ).replanningStart;
+      if (start == null) throw const FormatException('请核对最新行程时间。');
+      final proposed = [
+        for (final item in plan.tasks)
+          item.id == task.id ? item.reschedule(start: start) : item,
+      ];
+      const planner = PlanController.planner;
+      final analysis = planner.analyze(proposed);
+      final options = planner.options(
+        proposed,
+        analysis,
+        anchorId: task.id,
+        lockAnchor: event.kind == EventKind.changed && event.time != null,
+      );
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      final applied = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => ReviewPage(
+            day: day,
+            plan: plan,
+            analysis: analysis,
+            options: options,
+            noticeId: id,
+          ),
+        ),
+      );
+      if (!mounted || applied != true) return;
+      try {
+        if (widget.inbox.value case final inbox?) {
+          await ref
+              .read(notificationAssociationsProvider.notifier)
+              .refresh(inbox);
+        }
+      } catch (_) {
+        // The plan and its notification marker are already saved.
+      }
+      if (mounted && ModalRoute.of(context)?.isCurrent == true) _viewPlan(day);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is FormatException ? error.message : '暂时无法生成方案，请重试。',
+            ),
+          ),
+        );
+      }
+    } finally {
+      _reviewing = false;
+    }
   }
 
   Future<void> _choose(

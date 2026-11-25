@@ -8,6 +8,7 @@ import 'itinerary.dart';
 final planRepositoryProvider = Provider<PlanRepository>(
   (ref) => PlanRepository(),
 );
+final planWritesProvider = Provider<PlanWrites>((ref) => PlanWrites());
 final itineraryProvider =
     AsyncNotifierProvider.family<PlanController, SavedPlan, DateTime>(
       PlanController.new,
@@ -20,11 +21,43 @@ String planDayKey(DateTime day) =>
     planDay(day).toIso8601String().split('T').first;
 
 class SavedPlan {
-  SavedPlan(Iterable<ItineraryTask> tasks, {this.appliedTitle})
-    : tasks = List.unmodifiable(tasks);
+  SavedPlan(
+    Iterable<ItineraryTask> tasks, {
+    this.appliedTitle,
+    Iterable<String> appliedNotices = const [],
+  }) : tasks = List.unmodifiable(tasks),
+       appliedNotices = Set.unmodifiable(appliedNotices);
 
   final List<ItineraryTask> tasks;
   final String? appliedTitle;
+  final Set<String> appliedNotices;
+
+  SavedPlan withTasks(
+    Iterable<ItineraryTask> tasks, {
+    String? appliedTitle,
+    String? noticeId,
+  }) => SavedPlan(
+    tasks,
+    appliedTitle: appliedTitle,
+    appliedNotices: {...appliedNotices, ?noticeId},
+  );
+
+  Map<String, Object?> toJson() => {
+    'tasks': [for (final task in tasks) task.toJson()],
+    'appliedTitle': appliedTitle,
+    if (appliedNotices.isNotEmpty) 'appliedNotices': appliedNotices.toList(),
+  };
+}
+
+/// Serializes reads and writes that replace a day's plan, including imports.
+class PlanWrites {
+  Future<void> _tail = Future.value();
+
+  Future<T> run<T>(Future<T> Function() operation) {
+    final next = _tail.then((_) => operation());
+    _tail = next.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return next;
+  }
 }
 
 class PlanRepository {
@@ -63,16 +96,16 @@ class PlanRepository {
     final tasks = (decoded['tasks'] as List).map(
       (task) => ItineraryTask.fromJson(task as Map<String, dynamic>),
     );
-    return SavedPlan(tasks, appliedTitle: decoded['appliedTitle'] as String?);
+    return SavedPlan(
+      tasks,
+      appliedTitle: decoded['appliedTitle'] as String?,
+      appliedNotices:
+          (decoded['appliedNotices'] as List?)?.cast<String>() ?? const [],
+    );
   }
 
-  Future<void> save(DateTime day, SavedPlan plan) => _preferences.setString(
-    _key(day),
-    jsonEncode({
-      'tasks': plan.tasks.map((task) => task.toJson()).toList(),
-      'appliedTitle': plan.appliedTitle,
-    }),
-  );
+  Future<void> save(DateTime day, SavedPlan plan) =>
+      _preferences.setString(_key(day), jsonEncode(plan.toJson()));
 }
 
 class PlanController extends AsyncNotifier<SavedPlan> {
@@ -93,11 +126,11 @@ class PlanController extends AsyncNotifier<SavedPlan> {
     if (current.tasks.isNotEmpty) {
       throw const FormatException('请先清空行程，再创建看展示例。');
     }
-    return SavedPlan(planner.example());
+    return current.withTasks(planner.example());
   });
 
   Future<void> saveTask(ItineraryTask task) => _mutate(
-    (current) => SavedPlan([
+    (current) => current.withTasks([
       for (final item in current.tasks) item.id == task.id ? task : item,
       if (!current.tasks.any((item) => item.id == task.id)) task,
     ]),
@@ -107,11 +140,11 @@ class PlanController extends AsyncNotifier<SavedPlan> {
     if (current.tasks.any((item) => item.id == task.id)) {
       throw const FormatException('这条通知里的安排已加入当天行程。');
     }
-    return SavedPlan([...current.tasks, task]);
+    return current.withTasks([...current.tasks, task]);
   });
 
   Future<void> deleteTask(ItineraryTask task) => _mutate(
-    (current) => SavedPlan([
+    (current) => current.withTasks([
       for (final item in current.tasks)
         if (item.id != task.id)
           item.reschedule(
@@ -120,28 +153,55 @@ class PlanController extends AsyncNotifier<SavedPlan> {
     ]),
   );
 
-  Future<void> applyOption(ReplanOption option, SavedPlan reviewedPlan) =>
-      _mutate((current) {
-        if (!identical(current, reviewedPlan)) {
-          throw const FormatException('行程已更新，请重新查看方案。');
-        }
-        if (planner.analyze(option.tasks).conflicts.isNotEmpty) {
-          throw const FormatException('方案还有时间冲突，请重新检查。');
-        }
-        return SavedPlan(option.tasks, appliedTitle: option.title);
-      });
+  Future<void> applyOption(
+    ReplanOption option,
+    SavedPlan reviewedPlan, {
+    String? noticeId,
+  }) => _mutate((current) {
+    if (noticeId != null && current.appliedNotices.contains(noticeId)) {
+      throw const FormatException('这条通知的方案已应用。');
+    }
+    if (jsonEncode(current.toJson()) != jsonEncode(reviewedPlan.toJson())) {
+      throw const FormatException('行程已更新，请重新查看方案。');
+    }
+    final proposed = {for (final task in option.tasks) task.id: task};
+    if (proposed.length != current.tasks.length ||
+        current.tasks.any((task) {
+          final next = proposed[task.id];
+          return next == null ||
+              next.timing != task.timing ||
+              (task.timing == Timing.fixed &&
+                  (next.start != task.start || next.duration != task.duration));
+        })) {
+      throw const FormatException('方案必须保留原行程和固定时间。');
+    }
+    if (planner.analyze(option.tasks).conflicts.isNotEmpty) {
+      throw const FormatException('方案还有时间冲突，请重新检查。');
+    }
+    return current.withTasks(
+      option.tasks,
+      appliedTitle: option.title,
+      noticeId: noticeId,
+    );
+  });
 
   Future<void> _mutate(SavedPlan Function(SavedPlan) update) async {
-    final current = state.asData?.value;
-    if (current == null || _saving) {
+    if (state.asData == null || _saving) {
       throw const FormatException('行程正在保存或载入，请稍后再试。');
     }
     _saving = true;
     try {
-      final next = update(current);
-      planner.analyze(next.tasks);
-      await ref.read(planRepositoryProvider).save(day, next);
-      if (ref.mounted) state = AsyncData(next);
+      final repository = ref.read(planRepositoryProvider);
+      await ref.read(planWritesProvider).run(() async {
+        if (!ref.mounted) {
+          throw const FormatException('行程已更新，请重试。');
+        }
+        final current = await repository.load(day);
+        final next = update(current);
+        planner.analyze(next.tasks);
+        await repository.save(day, next);
+        if (ref.mounted) state = AsyncData(next);
+      });
     } finally {
       _saving = false;
     }

@@ -60,6 +60,7 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
       ? widget.task?.start ?? 14 * 60
       : widget.draft!.start;
   late Timing _timing = widget.task?.timing ?? Timing.flexible;
+  late TaskPriority _priority = widget.task?.priority ?? TaskPriority.normal;
   late final _after = {...?widget.task?.after};
   String? _error;
   bool _saving = false;
@@ -139,6 +140,7 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
       duration: int.parse(_duration.text),
       location: _location.text.trim(),
       timing: _timing,
+      priority: _priority,
       people: _people.text
           .split(RegExp(r'[、,，;；\n]'))
           .map((name) => name.trim())
@@ -312,6 +314,21 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
                       onChanged: _saving
                           ? null
                           : (value) => setState(() => _timing = value!),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<TaskPriority>(
+                      initialValue: _priority,
+                      decoration: const InputDecoration(labelText: '优先级'),
+                      items: [
+                        for (final priority in TaskPriority.values)
+                          DropdownMenuItem(
+                            value: priority,
+                            child: Text(priority.label),
+                          ),
+                      ],
+                      onChanged: _saving
+                          ? null
+                          : (value) => setState(() => _priority = value!),
                     ),
                     if (otherTasks.isNotEmpty) ...[
                       const SizedBox(height: 24),

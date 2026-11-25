@@ -7,6 +7,38 @@ import 'package:ripple_app/features/itinerary/plan_controller.dart';
 import 'package:ripple_app/main.dart';
 
 void main() {
+  test(
+    'a stale comparison preserves a plan changed before confirmation',
+    () async {
+      const planner = Planner();
+      final demo = planner.example();
+      final old = SavedPlan([
+        demo.first.reschedule(start: 14 * 60 + 40),
+        ...demo.skip(1),
+      ]);
+      final repository = _MemoryRepository()..plan = old;
+      final container = ProviderContainer(
+        overrides: [planRepositoryProvider.overrideWithValue(repository)],
+      );
+      addTearDown(container.dispose);
+      final day = DateTime(2026, 11, 25);
+      final provider = itineraryProvider(day);
+      final reviewed = await container.read(provider.future);
+      final options = planner.options(old.tasks, planner.analyze(old.tasks));
+      final newer = old.withTasks([
+        ...old.tasks.take(2),
+        old.tasks.last.reschedule(start: 18 * 60),
+      ]);
+      repository.plan = newer;
+
+      await expectLater(
+        container.read(provider.notifier).applyOption(options.first, reviewed),
+        throwsFormatException,
+      );
+      expect(repository.plan, same(newer));
+    },
+  );
+
   testWidgets('the example can be planned, reviewed, confirmed and reloaded', (
     tester,
   ) async {

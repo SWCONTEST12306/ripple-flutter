@@ -320,6 +320,65 @@ void main() {
     },
   );
 
+  testWidgets(
+    'the delayed notice compares two plans and saves only the selected one',
+    (tester) async {
+      final day = DateTime(2026, 11, 25);
+      final before = SavedPlan(const Planner().example());
+      final repository = _MemoryPlans()..days[day] = before;
+      final imports = _MemoryImportStore();
+      final links = _MemoryLinkStore();
+      final notice = _delayNotice();
+      _mockAssociationInbox(tester, notice);
+
+      await tester.pumpWidget(_app(repository, imports, links));
+      await tester.pumpAndSettle();
+      await _openAssociation(tester);
+      final compare = find.text('对比重规划方案');
+      await tester.ensureVisible(compare);
+      await tester.tap(compare);
+      await tester.pumpAndSettle();
+      expect(find.text('智能重规划'), findsOneWidget);
+      expect(find.text('保留固定时间　乘车返程 17:00'), findsOneWidget);
+      expect(find.text('改到 15:00 入场'), findsOneWidget);
+      final confirm = find.widgetWithText(FilledButton, '确认并更新行程');
+      expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
+
+      final alternative = find.text('按原时间入场，看完展再会合');
+      await tester.drag(find.byType(ListView), const Offset(0, -460));
+      await tester.pumpAndSettle();
+      await tester.tap(alternative);
+      await tester.pumpAndSettle();
+      expect(repository.days[day], same(before));
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      final saved = repository.days[day]!;
+      final [meeting, exhibition, returning] = saved.tasks;
+      expect(meeting.start, 16 * 60 + 30);
+      expect(exhibition.start, Planner.originalEntry);
+      expect(exhibition.duration, 120);
+      expect(returning.start, 17 * 60);
+      expect(const Planner().analyze(saved.tasks).conflicts, isEmpty);
+      expect(saved.appliedNotices, hasLength(1));
+      expect(find.textContaining('已应用方案'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(_app(repository, imports, links));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('查看通知关联'), findsNothing);
+      await tester.tap(find.widgetWithText(NavigationDestination, '设置'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('查看最近通知'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('小明'));
+      await tester.pumpAndSettle();
+      expect(find.text('已按此通知调整'), findsOneWidget);
+      expect(find.text('对比重规划方案'), findsNothing);
+      expect(repository.days[day], same(saved));
+    },
+  );
+
   testWidgets('a sufficient buffer absorbs the delay before the next task', (
     tester,
   ) async {

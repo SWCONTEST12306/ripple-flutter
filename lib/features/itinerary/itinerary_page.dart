@@ -188,7 +188,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   }
 
   void _review(SavedPlan plan, PlanAnalysis analysis) =>
-      Navigator.of(context).push<void>(
+      Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => ReviewPage(
             day: _day,

@@ -178,6 +178,7 @@ final notificationImportStoreProvider = Provider<NotificationImportStore>(
 final notificationImporterProvider = Provider<NotificationImporter>(
   (ref) => NotificationImporter(
     repository: ref.watch(planRepositoryProvider),
+    writes: ref.watch(planWritesProvider),
     store: ref.watch(notificationImportStoreProvider),
     onChanged: (day) => ref.invalidate(itineraryProvider(day)),
   ),
@@ -199,27 +200,23 @@ class NotificationSyncResult {
 class NotificationImporter {
   NotificationImporter({
     required this.repository,
+    required this.writes,
     required this.store,
     required this.onChanged,
   });
 
   final PlanRepository repository;
+  final PlanWrites writes;
   final NotificationImportStore store;
   final void Function(DateTime day) onChanged;
   Future<NotificationSyncResult>? _running;
-  Future<void> _tail = Future.value();
 
   Future<List<PendingAddition>> pending() => store.pending();
 
   Future<NotificationSyncResult> sync({NotificationInbox? inbox}) =>
-      _running ??= _serialize(() => _sync(inbox))
+      _running ??= writes
+          .run(() => _sync(inbox))
           .whenComplete(() => _running = null);
-
-  Future<T> _serialize<T>(Future<T> Function() operation) {
-    final next = _tail.then((_) => operation());
-    _tail = next.then<void>((_) {}, onError: (Object _, StackTrace _) {});
-    return next;
-  }
 
   Future<NotificationSyncResult> _sync(NotificationInbox? inbox) async {
     inbox ??= await NotificationInbox.read();
@@ -262,7 +259,7 @@ class NotificationImporter {
           final location = event.location ?? '';
           await writePlan(
             day,
-            SavedPlan([
+            plan.withTasks([
               ...plan.tasks,
               ItineraryTask(
                 id: id,
@@ -340,7 +337,7 @@ class NotificationImporter {
   Future<void> resolve(
     List<PendingAddition> items,
     Map<String, ImportDecision> decisions,
-  ) => _serialize(() async {
+  ) => writes.run(() async {
     for (final item in items) {
       final decision = decisions[item.key] ?? ImportDecision.keep;
       if (item.kind == PendingKind.added) {
@@ -366,7 +363,7 @@ class NotificationImporter {
     if (_findTask(plan, item.id) == null) return;
     await repository.save(
       item.day,
-      SavedPlan([
+      plan.withTasks([
         for (final task in plan.tasks)
           if (task.id != item.id)
             task.reschedule(
@@ -383,7 +380,7 @@ class NotificationImporter {
     if (task == null || task.start == item.start) return;
     await repository.save(
       item.day,
-      SavedPlan([
+      plan.withTasks([
         for (final existing in plan.tasks)
           existing.id == item.id
               ? existing.reschedule(start: item.start)
@@ -399,7 +396,7 @@ class NotificationImporter {
     if (_findTask(plan, id) != null) return;
     await repository.save(
       item.day,
-      SavedPlan([
+      plan.withTasks([
         ...plan.tasks,
         ItineraryTask(
           id: id,
@@ -408,6 +405,7 @@ class NotificationImporter {
           duration: item.duration,
           location: item.location,
           timing: Timing.flexible,
+          priority: _findTask(plan, item.id)?.priority ?? TaskPriority.normal,
           people: _findTask(plan, item.id)?.people ?? const [],
         ),
       ], appliedTitle: plan.appliedTitle),

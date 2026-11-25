@@ -18,12 +18,14 @@ class NotificationAssociation {
     this.target,
     this.impact = const NotificationImpact(),
     this.dismissed = false,
+    this.applied = false,
   });
 
   final List<ScheduleCandidate> candidates;
   final ScheduleCandidate? target;
   final NotificationImpact impact;
   final bool dismissed;
+  final bool applied;
 
   bool get needsChoice => target == null && candidates.isNotEmpty;
   bool get needsAttention => needsChoice || impact.needsAttention;
@@ -122,7 +124,9 @@ class NotificationAssociations
             .where((task) => task.id == link.taskId)
             .firstOrNull;
         if (task == null) {
-          next[id] = NotificationAssociation(candidates: match.candidates);
+          next[id] = plan.appliedNotices.contains(id)
+              ? const NotificationAssociation(applied: true)
+              : NotificationAssociation(candidates: match.candidates);
           continue;
         }
         final candidate =
@@ -130,9 +134,9 @@ class NotificationAssociations
                 .where((candidate) => candidate.task.id == link.taskId)
                 .firstOrNull ??
             ScheduleCandidate(day, task, const []);
-        next[id] = _linked(event, candidate, plan);
+        next[id] = _linked(id, event, candidate, plan);
       } else if (match.automatic case final candidate?) {
-        next[id] = _linked(event, candidate, plan);
+        next[id] = _linked(id, event, candidate, plan);
         links[id] = (day: day, taskId: candidate.task.id);
         savedLink = true;
       } else {
@@ -178,18 +182,21 @@ class NotificationAssociations
         candidate.evidence,
       );
       links[id] = (day: candidate.day, taskId: task.id);
-      result = _linked(event, current, plan);
+      result = _linked(id, event, current, plan);
     }
     await store.write(links);
     if (ref.mounted) state = {...state, id: result};
   });
 
   NotificationAssociation _linked(
+    String id,
     ExtractedEvent event,
     ScheduleCandidate candidate,
     SavedPlan plan,
-  ) => NotificationAssociation(
-    target: candidate,
-    impact: notificationImpact(event, candidate, plan.tasks),
-  );
+  ) => plan.appliedNotices.contains(id)
+      ? NotificationAssociation(target: candidate, applied: true)
+      : NotificationAssociation(
+          target: candidate,
+          impact: notificationImpact(event, candidate, plan.tasks),
+        );
 }

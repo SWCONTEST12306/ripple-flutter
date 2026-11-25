@@ -11,12 +11,14 @@ class ReviewPage extends ConsumerStatefulWidget {
     required this.plan,
     required this.analysis,
     required this.options,
+    this.noticeId,
   });
 
   final DateTime day;
   final SavedPlan plan;
   final PlanAnalysis analysis;
   final List<ReplanOption> options;
+  final String? noticeId;
 
   @override
   ConsumerState<ReviewPage> createState() => _ReviewPageState();
@@ -27,13 +29,15 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   bool _working = false;
 
   Future<void> _apply() async {
+    final selection = _selection;
+    if (_working || selection == null) return;
     setState(() => _working = true);
     try {
       await ref
           .read(itineraryProvider(widget.day).notifier)
-          .applyOption(_selection!, widget.plan);
+          .applyOption(selection, widget.plan, noticeId: widget.noticeId);
       if (mounted && ModalRoute.of(context)?.isCurrent == true) {
-        Navigator.pop(context);
+        Navigator.pop(context, true);
       }
     } catch (error) {
       if (mounted) {
@@ -55,8 +59,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     final theme = Theme.of(context);
     final names = {for (final task in widget.plan.tasks) task.id: task.title};
     final originals = {for (final task in widget.plan.tasks) task.id: task};
+    final fixed = widget.plan.tasks.where(
+      (task) => task.timing == Timing.fixed,
+    );
     return Scaffold(
-      appBar: AppBar(title: const Text('调整行程')),
+      appBar: AppBar(title: const Text('智能重规划')),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -64,34 +71,40 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 25),
               children: [
-                Text('时间冲突', style: theme.textTheme.titleLarge),
-                const SizedBox(height: 8),
-                for (final conflict in widget.analysis.conflicts)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.schedule),
-                    iconColor: theme.colorScheme.error,
-                    title: Text(
-                      '${clockTime(conflict.task.start)}　${conflict.task.title}',
+                if (widget.analysis.conflicts.isNotEmpty) ...[
+                  Text('时间冲突', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  for (final conflict in widget.analysis.conflicts)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.schedule),
+                      iconColor: theme.colorScheme.error,
+                      title: Text(
+                        '${clockTime(conflict.task.start)}　${conflict.task.title}',
+                      ),
+                      subtitle: Text(conflict.summary),
                     ),
-                    subtitle: Text(conflict.summary),
-                  ),
-                const Divider(height: 30),
+                  const Divider(height: 30),
+                ],
                 if (widget.options.isEmpty) ...[
                   Text('需要手动调整', style: theme.textTheme.titleLarge),
                   const SizedBox(height: 8),
-                  const Text('当前行程没有符合所有时间约束的方案。返回时间轴编辑时间、时长或前置行程。'),
+                  const Text('暂未找到符合时间约束的方案。可在日程中核对时间、时长或前置行程。'),
                   const SizedBox(height: 16),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: OutlinedButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('返回时间轴'),
+                      child: Text(widget.noticeId == null ? '返回时间轴' : '返回通知详情'),
                     ),
                   ),
                 ] else ...[
-                  Text('选择一个方案', style: theme.textTheme.titleLarge),
+                  Text('对比方案', style: theme.textTheme.titleLarge),
                   const SizedBox(height: 10),
+                  if (fixed.isNotEmpty)
+                    Text(
+                      '保留固定时间　${fixed.map((task) => '${task.title} ${clockTime(task.start)}').join('、')}',
+                    ),
                   RadioGroup<ReplanOption>(
                     groupValue: _selection,
                     onChanged: (option) => setState(() => _selection = option),
@@ -108,7 +121,12 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                   value: option,
                                   selected: option == _selection,
                                   title: Text(option.title),
-                                  subtitle: Text(option.description),
+                                  subtitle: Text(
+                                    widget.options.length > 1 &&
+                                            option == widget.options.first
+                                        ? '按优先级推荐　${option.description}'
+                                        : option.description,
+                                  ),
                                 ),
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(
@@ -181,6 +199,8 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       if (before.duration != after.duration)
         '${before.duration} → ${after.duration} 分钟',
       if (before.location != after.location) '地点改为 ${after.location}',
+      if (before.transfer != after.transfer)
+        '转场 ${before.transfer} → ${after.transfer} 分钟',
       if (before.after.toSet().difference(after.after.toSet()).isNotEmpty ||
           after.after.toSet().difference(before.after.toSet()).isNotEmpty)
         after.after.isEmpty
@@ -192,7 +212,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       Padding(
         padding: const EdgeInsets.only(top: 6),
         child: Text(
-          '${after.title}　${changes.join('　')}',
+          '${after.title}（${before.priority.label}优先级）　${changes.join('　')}',
           style: TextStyle(color: scheme.onSurfaceVariant),
         ),
       ),

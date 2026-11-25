@@ -23,10 +23,15 @@ class ImpactStep {
 }
 
 class NotificationImpact {
-  const NotificationImpact({this.steps = const [], this.alerts = const []});
+  const NotificationImpact({
+    this.steps = const [],
+    this.alerts = const [],
+    this.replanningStart,
+  });
 
   final List<ImpactStep> steps;
   final List<String> alerts;
+  final int? replanningStart;
 
   bool get needsAttention =>
       alerts.isNotEmpty || steps.skip(1).any((step) => step.worsens);
@@ -62,10 +67,12 @@ NotificationImpact notificationImpact(
       '通知涉及跨日调整，请核对原行程和新日期。',
   ];
   final location = event.location?.trim();
-  if (event.kind == EventKind.changed &&
+  final movesLocation =
+      event.kind == EventKind.changed &&
       location != null &&
       location.isNotEmpty &&
-      location != source.location.trim()) {
+      location != source.location.trim();
+  if (movesLocation) {
     alerts.add('通知地点为$location，请核对原地点。');
   }
   if (event.kind == EventKind.cancelled ||
@@ -212,5 +219,16 @@ NotificationImpact notificationImpact(
     }
   }
 
-  return NotificationImpact(steps: steps, alerts: alerts);
+  return NotificationImpact(
+    steps: steps,
+    alerts: alerts,
+    replanningStart:
+        source.timing == Timing.flexible &&
+            !movesToAnotherDay &&
+            !movesLocation &&
+            revisedStart >= 0 &&
+            revisedStart < minutesPerDay
+        ? revisedStart
+        : null,
+  );
 }
