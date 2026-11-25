@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../itinerary/plan_controller.dart';
 import 'notification_analysis.dart';
 import 'notification_event.dart';
+import 'notification_impact.dart';
 import 'notification_inbox.dart';
 import 'schedule_matcher.dart';
 
@@ -15,17 +16,17 @@ class NotificationAssociation {
   const NotificationAssociation({
     this.candidates = const [],
     this.target,
-    this.alerts = const [],
+    this.impact = const NotificationImpact(),
     this.dismissed = false,
   });
 
   final List<ScheduleCandidate> candidates;
   final ScheduleCandidate? target;
-  final List<String> alerts;
+  final NotificationImpact impact;
   final bool dismissed;
 
   bool get needsChoice => target == null && candidates.isNotEmpty;
-  bool get needsAttention => needsChoice || alerts.isNotEmpty;
+  bool get needsAttention => needsChoice || impact.needsAttention;
 }
 
 class NotificationLinkStore {
@@ -189,6 +190,6 @@ class NotificationAssociations
     SavedPlan plan,
   ) => NotificationAssociation(
     target: candidate,
-    alerts: scheduleAlert(event, candidate, plan),
+    impact: notificationImpact(event, candidate, plan.tasks),
   );
 }

@@ -288,7 +288,7 @@ void main() {
   });
 
   testWidgets(
-    'a clear delayed event links to the exhibition and previews a conflict',
+    'a delay propagates from the meeting to the exhibition and return',
     (tester) async {
       final day = DateTime(2026, 11, 25);
       final repository = _MemoryPlans()
@@ -303,17 +303,79 @@ void main() {
       await _openAssociation(tester);
       expect(find.text('已关联：与朋友集合'), findsOneWidget);
       expect(find.text('变动待确认'), findsOneWidget);
-      expect(find.textContaining('「展馆入场」'), findsOneWidget);
-      expect(find.textContaining('14:50'), findsOneWidget);
+      expect(find.text('事件影响预览'), findsOneWidget);
+      expect(find.text('「展馆入场」'), findsOneWidget);
+      expect(find.text('原定 14:30 · 预计最早 14:50'), findsOneWidget);
+      expect(find.text('可能错过预约（晚 20 分钟）'), findsOneWidget);
+      expect(find.text('「乘车返程」'), findsOneWidget);
+      expect(find.text('原定 17:00 · 预计最早 17:10'), findsOneWidget);
+      expect(find.text('可能赶不上固定时间（晚 10 分钟）'), findsOneWidget);
       expect(find.text('加入行程'), findsNothing);
       expect(repository.days[day], same(before));
       final view = find.text('查看关联行程');
-      await tester.ensureVisible(view);
+      await tester.drag(find.byType(ListView), const Offset(0, -450));
+      await tester.pumpAndSettle();
       await tester.tap(view);
       await tester.pumpAndSettle();
       expect(find.text('2026年11月25日'), findsOneWidget);
     },
   );
+
+  testWidgets('a sufficient buffer absorbs the delay before the next task', (
+    tester,
+  ) async {
+    final day = DateTime(2026, 11, 25);
+    final [meeting, exhibition, returning] = const Planner().example();
+    final before = SavedPlan([
+      meeting,
+      exhibition.reschedule(start: 15 * 60),
+      returning.reschedule(start: 18 * 60),
+    ]);
+    final repository = _MemoryPlans()..days[day] = before;
+    _mockAssociationInbox(tester, _delayNotice());
+
+    await tester.pumpWidget(_app(repository, _MemoryImportStore()));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('查看通知关联'), findsNothing);
+    await tester.tap(find.widgetWithText(NavigationDestination, '设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('查看最近通知'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('小明'));
+    await tester.pumpAndSettle();
+    expect(find.text('「展馆入场」'), findsOneWidget);
+    expect(find.text('原定 15:00 · 预计最早 15:00'), findsOneWidget);
+    expect(find.textContaining('延误已被本段缓冲吸收'), findsOneWidget);
+    expect(find.text('「乘车返程」'), findsNothing);
+    expect(repository.days[day], same(before));
+  });
+
+  testWidgets('an unrelated itinerary is outside the impact preview', (
+    tester,
+  ) async {
+    final day = DateTime(2026, 11, 25);
+    final unrelated = ItineraryTask(
+      id: 'reading',
+      title: '图书馆自习',
+      start: 10 * 60,
+      duration: 30,
+      location: '图书馆',
+      timing: Timing.fixed,
+    );
+    final before = SavedPlan([unrelated, ...const Planner().example()]);
+    final repository = _MemoryPlans()..days[day] = before;
+    _mockAssociationInbox(tester, _delayNotice());
+
+    await tester.pumpWidget(_app(repository, _MemoryImportStore()));
+    await tester.pumpAndSettle();
+    await _openAssociation(tester);
+    expect(find.text('事件影响预览'), findsOneWidget);
+    expect(find.text('「乘车返程」'), findsOneWidget);
+    expect(find.textContaining('图书馆自习'), findsNothing);
+    expect(repository.days[day], same(before));
+    expect(repository.days[day]!.tasks.first, same(unrelated));
+    expect(unrelated.start, 10 * 60);
+  });
 
   testWidgets('two plausible events require a choice and keep it on restart', (
     tester,

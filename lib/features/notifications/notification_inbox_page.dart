@@ -10,6 +10,7 @@ import '../itinerary/task_editor.dart';
 import 'notification_analysis.dart';
 import 'notification_association.dart';
 import 'notification_event.dart';
+import 'notification_impact.dart';
 import 'notification_inbox.dart';
 import 'notification_model_page.dart';
 import 'schedule_matcher.dart';
@@ -194,7 +195,7 @@ class _NotificationInboxPageState extends ConsumerState<NotificationInboxPage> {
                     notice.text,
                   if (status.any((link) => link.needsChoice))
                     '待选择关联行程'
-                  else if (status.any((link) => link.alerts.isNotEmpty))
+                  else if (status.any((link) => link.impact.needsAttention))
                     '有关联行程需要核对'
                   else if (status.any((link) => link.target != null))
                     '已关联行程',
@@ -404,14 +405,16 @@ class _NotificationDetailState extends State<_NotificationDetail> {
             ),
             Text(_candidateDetails(target)),
             if (target.evidence.isNotEmpty) Text(target.evidence.join('、')),
-            if (association.alerts.isNotEmpty) ...[
+            if (association.impact.alerts.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(
                 '请核对行程',
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
-              for (final alert in association.alerts) Text(alert),
+              for (final alert in association.impact.alerts) Text(alert),
             ],
+            if (association.impact.steps.isNotEmpty)
+              _ImpactPreview(association.impact.steps),
             TextButton.icon(
               onPressed: () => _viewPlan(target.day),
               icon: const Icon(Icons.event_outlined),
@@ -477,6 +480,86 @@ class _NotificationDetailState extends State<_NotificationDetail> {
     '${planDayLabel(candidate.day)} ${clockTime(candidate.task.start)}',
     if (candidate.task.location.isNotEmpty) candidate.task.location,
   ].join(' · ');
+}
+
+class _ImpactPreview extends StatelessWidget {
+  const _ImpactPreview(this.steps);
+
+  final List<ImpactStep> steps;
+
+  String _time(int minutes) {
+    if (minutes >= 0) return clockTime(minutes);
+    final daysBack = (-minutes + minutesPerDay - 1) ~/ minutesPerDay;
+    final day = daysBack == 1 ? '前一日' : '$daysBack 天前';
+    return '$day ${clockTime(minutes % minutesPerDay)}';
+  }
+
+  String? _reason(ImpactStep step) {
+    final predecessor = step.predecessor;
+    if (predecessor == null) return null;
+    if (step.earliest == null) return '请先核对前置行程「${predecessor.title}」。';
+    if (step.absorbed) return '「${predecessor.title}」的延误已被本段缓冲吸收。';
+    if (!step.worsens) return '「${predecessor.title}」更早就绪。';
+    final transfer = step.task.transfer;
+    return transfer == 0
+        ? '需要等「${predecessor.title}」完成。'
+        : '「${predecessor.title}」完成后需转场 $transfer 分钟。';
+  }
+
+  String? _timeRisk(ImpactStep step) {
+    if (!step.worsens || step.lateMinutes <= 0) return null;
+    final late = '晚 ${step.lateMinutes} 分钟';
+    return switch (step.task.timing) {
+      Timing.flexible => '预计$late',
+      Timing.reservation => '可能错过预约（$late）',
+      Timing.fixed => '可能赶不上固定时间（$late）',
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('事件影响预览', style: theme.textTheme.titleMedium),
+          for (final step in steps)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '「${step.task.title}」',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  Text(
+                    [
+                      '原定 ${_time(step.task.start)}',
+                      if (step.earliest != null &&
+                          step.baseline != step.task.start)
+                        '变动前最早 ${_time(step.baseline)}',
+                      if (step.earliest case final earliest?)
+                        '预计最早 ${_time(earliest)}'
+                      else
+                        '时间待核对',
+                    ].join(' · '),
+                  ),
+                  if (_reason(step) case final reason?) Text(reason),
+                  if (_timeRisk(step) case final risk?)
+                    Text(
+                      risk,
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 String _extractionStatus(AndroidNotice notice) {
