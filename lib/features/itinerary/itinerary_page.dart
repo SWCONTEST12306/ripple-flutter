@@ -29,7 +29,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   bool _scrolling = false;
   int _destinationIndex = 0;
   DateTime _day = planDay(DateTime.now());
-  AppLifecycleListener? _notificationLifecycle;
+  late final AppLifecycleListener _appLifecycle;
   StreamSubscription<dynamic>? _notificationChanges;
   bool _syncingNotifications = false;
   bool _syncAgain = false;
@@ -42,10 +42,11 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   @override
   void initState() {
     super.initState();
-    if (!_notificationsAvailable) return;
-    _notificationLifecycle = AppLifecycleListener(
+    _appLifecycle = AppLifecycleListener(
+      onShow: _returnToToday,
       onResume: () => _syncNotifications(review: true),
     );
+    if (!_notificationsAvailable) return;
     _notificationChanges = NotificationInbox.changes.listen(
       (_) => _syncNotifications(),
       onError: (Object _) => _syncNotifications(),
@@ -58,8 +59,17 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   @override
   void dispose() {
     _notificationChanges?.cancel();
-    _notificationLifecycle?.dispose();
+    _appLifecycle.dispose();
     super.dispose();
+  }
+
+  void _returnToToday() {
+    final today = planDay(DateTime.now());
+    if (_day == today) return;
+    setState(() {
+      _day = today;
+      _scrolling = false;
+    });
   }
 
   Future<void> _syncNotifications({bool review = false}) async {
@@ -187,17 +197,19 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     );
   }
 
-  void _review(SavedPlan plan, PlanAnalysis analysis) =>
-      Navigator.of(context).push<bool>(
-        MaterialPageRoute(
-          builder: (_) => ReviewPage(
-            day: _day,
-            plan: plan,
-            analysis: analysis,
-            options: PlanController.planner.options(plan.tasks, analysis),
-          ),
+  void _review(SavedPlan plan, PlanAnalysis analysis) {
+    final day = _day;
+    Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ReviewPage(
+          day: day,
+          plan: plan,
+          analysis: analysis,
+          options: PlanController.planner.options(plan.tasks, analysis),
         ),
-      );
+      ),
+    );
+  }
 
   bool _handleScroll(ScrollNotification notification) {
     if (notification.depth != 0) return false;

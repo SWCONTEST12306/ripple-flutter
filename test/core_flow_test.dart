@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ripple_app/features/itinerary/day_picker.dart';
 import 'package:ripple_app/features/itinerary/itinerary.dart';
 import 'package:ripple_app/features/itinerary/plan_controller.dart';
 import 'package:ripple_app/main.dart';
@@ -38,6 +40,62 @@ void main() {
       expect(repository.plan, same(newer));
     },
   );
+
+  testWidgets('reopening the app returns the schedule to today', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    Future<void> setLifecycle(AppLifecycleState state) async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        SystemChannels.lifecycle.name,
+        const StringCodec().encodeMessage(state.toString()),
+        (_) {},
+      );
+    }
+
+    final today = planDay(DateTime.now());
+    final otherDay = DateTime(today.year, today.month, today.day == 1 ? 2 : 1);
+    final todayButton = find.widgetWithText(TextButton, planDayLabel(today));
+    final otherDayButton = find.widgetWithText(
+      TextButton,
+      planDayLabel(otherDay),
+    );
+    await setLifecycle(AppLifecycleState.resumed);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          planRepositoryProvider.overrideWithValue(_MemoryRepository()),
+        ],
+        child: const RippleApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(todayButton, findsOneWidget);
+
+    await tester.tap(todayButton);
+    await tester.pumpAndSettle();
+    final calendar = find.byType(CalendarDatePicker);
+    await tester.tap(
+      find.descendant(of: calendar, matching: find.text('${otherDay.day}')),
+    );
+    final localizations = MaterialLocalizations.of(tester.element(calendar));
+    await tester.tap(
+      find.widgetWithText(TextButton, localizations.okButtonLabel),
+    );
+    await tester.pumpAndSettle();
+    expect(otherDayButton, findsOneWidget);
+
+    await setLifecycle(AppLifecycleState.inactive);
+    await setLifecycle(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(otherDayButton, findsOneWidget);
+
+    await setLifecycle(AppLifecycleState.paused);
+    await setLifecycle(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(todayButton, findsOneWidget);
+  });
 
   testWidgets('the example can be planned, reviewed, confirmed and reloaded', (
     tester,
