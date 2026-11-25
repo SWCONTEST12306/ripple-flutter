@@ -55,7 +55,7 @@ internal object ImageSchedule {
     val observers = mutableListOf<() -> Unit>()
 
     /**
-     * 接收 Android 分享（ACTION_SEND + image/*），把图片复制到缓存目录后通知 Dart。
+     * 接收 Android 分享（ACTION_SEND 且类型为图片），把图片复制到缓存目录后通知 Dart。
      * 复制在后台线程完成，避免分享大图时卡住界面。
      */
     fun acceptShare(context: Context, intent: Intent?): Boolean {
