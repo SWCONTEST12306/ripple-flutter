@@ -313,8 +313,7 @@ void main() {
       expect(find.text('加入行程'), findsNothing);
       expect(repository.days[day], same(before));
       final view = find.text('查看关联行程');
-      await tester.drag(find.byType(ListView), const Offset(0, -450));
-      await tester.pumpAndSettle();
+      await tester.ensureVisible(view);
       await tester.tap(view);
       await tester.pumpAndSettle();
       expect(find.text('2026年11月25日'), findsOneWidget);

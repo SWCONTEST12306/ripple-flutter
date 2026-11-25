@@ -413,13 +413,13 @@ class _NotificationDetailState extends State<_NotificationDetail> {
               ),
               for (final alert in association.impact.alerts) Text(alert),
             ],
-            if (association.impact.steps.isNotEmpty)
-              _ImpactPreview(association.impact.steps),
             TextButton.icon(
               onPressed: () => _viewPlan(target.day),
               icon: const Icon(Icons.event_outlined),
               label: const Text('查看关联行程'),
             ),
+            if (association.impact.steps.isNotEmpty)
+              _ImpactPreview(association.impact.steps),
           ],
         );
       },
