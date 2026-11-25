@@ -13,6 +13,7 @@ class TaskDraft {
     required this.id,
     required this.title,
     this.location,
+    this.people = const [],
     this.start,
     this.duration,
   });
@@ -20,6 +21,7 @@ class TaskDraft {
   final String id;
   final String title;
   final String? location;
+  final List<String> people;
   final int? start;
   final int? duration;
 }
@@ -43,6 +45,9 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
   late final _location = TextEditingController(
     text: widget.task?.location ?? widget.draft?.location,
   );
+  late final _people = TextEditingController(
+    text: widget.task?.people.join('、') ?? widget.draft?.people.join('、'),
+  );
   late final _duration = TextEditingController(
     text:
         '${widget.task?.duration ?? widget.draft?.duration ?? (widget.draft == null ? 30 : 0)}',
@@ -55,6 +60,7 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
       ? widget.task?.start ?? 14 * 60
       : widget.draft!.start;
   late Timing _timing = widget.task?.timing ?? Timing.flexible;
+  late TaskPriority _priority = widget.task?.priority ?? TaskPriority.normal;
   late final _after = {...?widget.task?.after};
   String? _error;
   bool _saving = false;
@@ -63,6 +69,7 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
   void dispose() {
     _title.dispose();
     _location.dispose();
+    _people.dispose();
     _duration.dispose();
     _transfer.dispose();
     super.dispose();
@@ -133,6 +140,12 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
       duration: int.parse(_duration.text),
       location: _location.text.trim(),
       timing: _timing,
+      priority: _priority,
+      people: _people.text
+          .split(RegExp(r'[、,，;；\n]'))
+          .map((name) => name.trim())
+          .where((name) => name.isNotEmpty)
+          .toSet(),
       transfer: _after.isEmpty ? 0 : int.parse(_transfer.text),
       after: _after,
     );
@@ -255,6 +268,21 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
                       decoration: const InputDecoration(labelText: '地点（选填）'),
                     ),
                     const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _people,
+                      maxLength: max(
+                        100,
+                        (widget.task?.people ?? widget.draft?.people ?? [])
+                            .join('、')
+                            .characters
+                            .length,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: '参与人（选填）',
+                        hintText: '多人可用顿号分隔',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     if (draft != null) ...[
                       OutlinedButton.icon(
                         onPressed: _saving ? null : _pickDay,
@@ -286,6 +314,21 @@ class _TaskEditorState extends ConsumerState<TaskEditor> {
                       onChanged: _saving
                           ? null
                           : (value) => setState(() => _timing = value!),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<TaskPriority>(
+                      initialValue: _priority,
+                      decoration: const InputDecoration(labelText: '优先级'),
+                      items: [
+                        for (final priority in TaskPriority.values)
+                          DropdownMenuItem(
+                            value: priority,
+                            child: Text(priority.label),
+                          ),
+                      ],
+                      onChanged: _saving
+                          ? null
+                          : (value) => setState(() => _priority = value!),
                     ),
                     if (otherTasks.isNotEmpty) ...[
                       const SizedBox(height: 24),

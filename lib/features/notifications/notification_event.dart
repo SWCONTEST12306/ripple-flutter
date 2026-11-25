@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import '../itinerary/plan_controller.dart';
 import 'notification_analysis.dart';
 import 'notification_inbox.dart';
 
@@ -18,4 +19,19 @@ String notificationTaskId(AndroidNotice notice, ExtractedEvent event) {
     event.evidence,
   ]);
   return 'notice-${sha256.convert(utf8.encode(key))}';
+}
+
+int? eventMinutes(String? time) {
+  if (time == null ||
+      !RegExp(r'^(?:[01][0-9]|2[0-3]):[0-5][0-9]$').hasMatch(time)) {
+    return null;
+  }
+  final parts = time.split(':');
+  return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+}
+
+DateTime? eventDate(String? date) {
+  if (date == null) return null;
+  final day = DateTime.tryParse(date);
+  return day != null && planDayKey(day) == date ? planDay(day) : null;
 }

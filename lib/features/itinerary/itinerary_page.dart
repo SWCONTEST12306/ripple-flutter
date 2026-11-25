@@ -5,8 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../notifications/notification_association.dart';
 import '../notifications/notification_import.dart';
 import '../notifications/notification_inbox.dart';
+import '../notifications/notification_inbox_page.dart';
 import '../notifications/notification_review_dialog.dart';
 import '../settings/settings_page.dart';
 import 'day_picker.dart';
@@ -30,6 +32,8 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
   AppLifecycleListener? _notificationLifecycle;
   StreamSubscription<dynamic>? _notificationChanges;
   bool _syncingNotifications = false;
+  bool _syncAgain = false;
+  bool _reviewAfterSync = false;
   bool _reviewingNotifications = false;
 
   bool get _notificationsAvailable =>
@@ -58,24 +62,56 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     super.dispose();
   }
 
-  /// Adds newly parsed notification events to the itinerary right away, and
-  /// asks about repeated notifications that no longer match the schedule.
   Future<void> _syncNotifications({bool review = false}) async {
-    if (!_notificationsAvailable || _syncingNotifications) return;
+    if (!mounted || !_notificationsAvailable) return;
+    if (_syncingNotifications) {
+      _syncAgain = true;
+      _reviewAfterSync |= review;
+      return;
+    }
     _syncingNotifications = true;
+    var reminders = 0;
     try {
-      final importer = ref.read(notificationImporterProvider);
-      var reminders = 0;
+      final inbox = await NotificationInbox.read();
+      if (!mounted) return;
       try {
-        reminders = (await importer.sync()).reminders;
+        final importer = ref.read(notificationImporterProvider);
+        reminders = (await importer.sync(inbox: inbox)).reminders;
       } catch (_) {
-        // 读取通知或写入行程失败时保持现状，下次再试。
+        // 写入失败时，下次同步重试。
       }
-      if ((review || reminders > 0) && mounted) await _reviewImports();
+      if (!mounted) return;
+      final alerts = await ref
+          .read(notificationAssociationsProvider.notifier)
+          .refresh(inbox);
+      if (alerts > 0 && mounted && ModalRoute.of(context)?.isCurrent == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$alerts 条通知需要核对关联行程'),
+            action: SnackBarAction(
+              label: '查看关联',
+              onPressed: _openAssociationInbox,
+            ),
+          ),
+        );
+      }
     } catch (_) {
-      // 弹窗失败时不影响日程使用。
+      // 保留上次结果，等待下一次同步。
     } finally {
       _syncingNotifications = false;
+      if (_syncAgain && mounted) {
+        final review = _reviewAfterSync;
+        _syncAgain = false;
+        _reviewAfterSync = false;
+        unawaited(_syncNotifications(review: review));
+      }
+    }
+    if ((review || reminders > 0) && mounted) {
+      try {
+        await _reviewImports();
+      } catch (_) {
+        // 保留待确认项目，等待下一次打开。
+      }
     }
   }
 
@@ -87,6 +123,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     final pending = await importer.pending();
     if (pending.isEmpty || !mounted) return;
     if (ModalRoute.of(context)?.isCurrent != true) return;
+    if (_reviewingNotifications) return;
     _reviewingNotifications = true;
     try {
       final decisions = await showDialog<Map<String, ImportDecision>>(
@@ -104,6 +141,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     setState(() => _working = true);
     try {
       await operation(ref.read(itineraryProvider(_day).notifier));
+      unawaited(_syncNotifications());
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -119,17 +157,38 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
     }
   }
 
-  void _edit([ItineraryTask? task]) {
+  Future<void> _edit([ItineraryTask? task]) async {
     final day = _day;
-    Navigator.of(context).push<DateTime>(
+    final saved = await Navigator.of(context).push<DateTime>(
       MaterialPageRoute(
         builder: (_) => TaskEditor(day: day, task: task),
+      ),
+    );
+    if (saved != null) unawaited(_syncNotifications());
+  }
+
+  void _viewPlan(DateTime day) {
+    setState(() {
+      _day = planDay(day);
+      _destinationIndex = 0;
+      _scrolling = false;
+    });
+  }
+
+  void _openAssociationInbox() {
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => NotificationInboxPage(
+          onViewPlan: _viewPlan,
+          associationsFirst: true,
+        ),
       ),
     );
   }
 
   void _review(SavedPlan plan, PlanAnalysis analysis) =>
-      Navigator.of(context).push<void>(
+      Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => ReviewPage(
             day: _day,
@@ -201,6 +260,14 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
 
   Widget _content(SavedPlan plan) {
     final isSchedule = _destinationIndex == 0;
+    final associationAlerts = _notificationsAvailable
+        ? ref.watch(
+            notificationAssociationsProvider.select(
+              (links) =>
+                  links.values.where((link) => link.needsAttention).length,
+            ),
+          )
+        : 0;
     final sideInset =
         (MediaQuery.sizeOf(context).width - 640).clamp(0.0, double.infinity) /
             2 +
@@ -213,6 +280,17 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
       child: Scaffold(
         appBar: AppBar(
           toolbarHeight: 48,
+          actions: [
+            if (associationAlerts > 0 && _destinationIndex != 2)
+              IconButton(
+                tooltip: '查看通知关联',
+                onPressed: _openAssociationInbox,
+                icon: Badge.count(
+                  count: associationAlerts,
+                  child: const Icon(Icons.notifications_outlined),
+                ),
+              ),
+          ],
           title: _destinationIndex == 2
               ? const Text('设置')
               : TextButton.icon(
@@ -271,15 +349,7 @@ class _ItineraryPageState extends ConsumerState<ItineraryPage> {
               sideInset,
             ),
             1 => _relationships(plan, sideInset),
-            _ => SettingsPage(
-              onViewPlan: (day) {
-                setState(() {
-                  _day = day;
-                  _destinationIndex = 0;
-                  _scrolling = false;
-                });
-              },
-            ),
+            _ => SettingsPage(onViewPlan: _viewPlan),
           },
         ),
       ),

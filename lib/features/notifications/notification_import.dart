@@ -147,8 +147,7 @@ class SharedPreferencesImportStore implements NotificationImportStore {
       (await _preferences.getStringList(_importedKey) ?? const []).toSet();
 
   @override
-  Future<void> markImported(Iterable<String> ids) =>
-      _append(_importedKey, ids);
+  Future<void> markImported(Iterable<String> ids) => _append(_importedKey, ids);
 
   @override
   Future<Set<String>> reminders() async =>
@@ -179,6 +178,7 @@ final notificationImportStoreProvider = Provider<NotificationImportStore>(
 final notificationImporterProvider = Provider<NotificationImporter>(
   (ref) => NotificationImporter(
     repository: ref.watch(planRepositoryProvider),
+    writes: ref.watch(planWritesProvider),
     store: ref.watch(notificationImportStoreProvider),
     onChanged: (day) => ref.invalidate(itineraryProvider(day)),
   ),
@@ -200,22 +200,26 @@ class NotificationSyncResult {
 class NotificationImporter {
   NotificationImporter({
     required this.repository,
+    required this.writes,
     required this.store,
     required this.onChanged,
   });
 
   final PlanRepository repository;
+  final PlanWrites writes;
   final NotificationImportStore store;
   final void Function(DateTime day) onChanged;
   Future<NotificationSyncResult>? _running;
 
   Future<List<PendingAddition>> pending() => store.pending();
 
-  Future<NotificationSyncResult> sync() =>
-      _running ??= _sync().whenComplete(() => _running = null);
+  Future<NotificationSyncResult> sync({NotificationInbox? inbox}) =>
+      _running ??= writes
+          .run(() => _sync(inbox))
+          .whenComplete(() => _running = null);
 
-  Future<NotificationSyncResult> _sync() async {
-    final inbox = await NotificationInbox.read();
+  Future<NotificationSyncResult> _sync(NotificationInbox? inbox) async {
+    inbox ??= await NotificationInbox.read();
     if (!inbox.authorized) return const NotificationSyncResult();
     final imported = await store.imported();
     final reminded = await store.reminders();
@@ -239,11 +243,11 @@ class NotificationImporter {
       final analysis = notice.analysis;
       if (analysis == null) continue;
       for (final event in analysis.events) {
-        if (event.kind == EventKind.cancelled) continue;
-        final start = _minutes(event.time);
+        if (event.kind != EventKind.newEvent) continue;
+        final start = eventMinutes(event.time);
         if (start == null) continue;
         final id = notificationTaskId(notice, event);
-        final day = _dayOf(event.date, notice.localPostedAt);
+        final day = eventDate(event.date) ?? planDay(notice.localPostedAt);
 
         if (!imported.contains(id)) {
           final plan = await readPlan(day);
@@ -255,7 +259,7 @@ class NotificationImporter {
           final location = event.location ?? '';
           await writePlan(
             day,
-            SavedPlan([
+            plan.withTasks([
               ...plan.tasks,
               ItineraryTask(
                 id: id,
@@ -264,6 +268,7 @@ class NotificationImporter {
                 duration: duration,
                 location: location,
                 timing: Timing.flexible,
+                people: event.people,
               ),
             ], appliedTitle: plan.appliedTitle),
           );
@@ -332,7 +337,7 @@ class NotificationImporter {
   Future<void> resolve(
     List<PendingAddition> items,
     Map<String, ImportDecision> decisions,
-  ) async {
+  ) => writes.run(() async {
     for (final item in items) {
       final decision = decisions[item.key] ?? ImportDecision.keep;
       if (item.kind == PendingKind.added) {
@@ -351,14 +356,14 @@ class NotificationImporter {
       for (final item in pending)
         if (!resolved.contains(item.key)) item,
     ]);
-  }
+  });
 
   Future<void> _deleteTask(PendingAddition item) async {
     final plan = await repository.load(item.day);
     if (_findTask(plan, item.id) == null) return;
     await repository.save(
       item.day,
-      SavedPlan([
+      plan.withTasks([
         for (final task in plan.tasks)
           if (task.id != item.id)
             task.reschedule(
@@ -375,7 +380,7 @@ class NotificationImporter {
     if (task == null || task.start == item.start) return;
     await repository.save(
       item.day,
-      SavedPlan([
+      plan.withTasks([
         for (final existing in plan.tasks)
           existing.id == item.id
               ? existing.reschedule(start: item.start)
@@ -391,7 +396,7 @@ class NotificationImporter {
     if (_findTask(plan, id) != null) return;
     await repository.save(
       item.day,
-      SavedPlan([
+      plan.withTasks([
         ...plan.tasks,
         ItineraryTask(
           id: id,
@@ -400,6 +405,8 @@ class NotificationImporter {
           duration: item.duration,
           location: item.location,
           timing: Timing.flexible,
+          priority: _findTask(plan, item.id)?.priority ?? TaskPriority.normal,
+          people: _findTask(plan, item.id)?.people ?? const [],
         ),
       ], appliedTitle: plan.appliedTitle),
     );
@@ -412,19 +419,4 @@ ItineraryTask? _findTask(SavedPlan plan, String id) {
     if (task.id == id) return task;
   }
   return null;
-}
-
-int? _minutes(String? time) {
-  final parts = time?.split(':');
-  if (parts == null || parts.length != 2) return null;
-  final hour = int.tryParse(parts[0]);
-  final minute = int.tryParse(parts[1]);
-  if (hour == null || minute == null) return null;
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-  return hour * 60 + minute;
-}
-
-DateTime _dayOf(String? date, DateTime posted) {
-  final parsed = date == null ? null : DateTime.tryParse(date);
-  return planDay(parsed ?? posted);
 }

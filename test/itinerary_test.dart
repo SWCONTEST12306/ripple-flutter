@@ -103,6 +103,72 @@ void main() {
     ];
     expect(planner.options(tight, planner.analyze(tight)), isEmpty);
   });
+
+  test('overlap options prefer moving lower-priority tasks and preserve fixed times', () {
+    final high = _task('会面', 11 * 60, 30, priority: TaskPriority.high);
+    final low = _task('购物', 11 * 60, 30, priority: TaskPriority.low);
+    final fixed = _task('返程', 17 * 60, 0, timing: Timing.fixed);
+    final tasks = [high, low, fixed];
+    final options = planner.options(tasks, planner.analyze(tasks));
+
+    expect(options.length, greaterThanOrEqualTo(2));
+    expect(options.take(2).map((option) => option.tasks[1].start).toSet(), {
+      10 * 60 + 30,
+      11 * 60 + 30,
+    });
+    expect(
+      options.take(2).every((option) => option.tasks.first.start == high.start),
+      isTrue,
+    );
+    for (final option in options) {
+      expect(option.tasks.last, same(fixed));
+      expect(planner.analyze(option.tasks).conflicts, isEmpty);
+    }
+
+    final sameTime = [
+      fixed,
+      _task('另一趟车', fixed.start, 0, timing: Timing.fixed),
+    ];
+    expect(planner.options(sameTime, planner.analyze(sameTime)), isEmpty);
+  });
+
+  test('a delayed task stays at or after the time in the notification', () {
+    final meeting = _task('集合', 14 * 60 + 40, 10);
+    final reservation = _task(
+      '预约',
+      14 * 60 + 45,
+      30,
+      timing: Timing.reservation,
+    );
+    final tasks = [meeting, reservation];
+    final options = planner.options(
+      tasks,
+      planner.analyze(tasks),
+      anchorId: meeting.id,
+    );
+    expect(options.single.tasks.first.start, 15 * 60 + 15);
+    expect(options.single.tasks.last, same(reservation));
+    expect(
+      planner.options(
+        tasks,
+        planner.analyze(tasks),
+        anchorId: meeting.id,
+        lockAnchor: true,
+      ),
+      isEmpty,
+    );
+  });
+
+  test('priorities survive plan changes and older tasks default to normal', () {
+    final high = _task('集合', 14 * 60, 0, priority: TaskPriority.high);
+    final revised = high.reschedule(start: 14 * 60 + 40);
+    final saved = revised.toJson();
+    expect(ItineraryTask.fromJson(saved).priority, TaskPriority.high);
+    expect(
+      ItineraryTask.fromJson({...saved}..remove('priority')).priority,
+      TaskPriority.normal,
+    );
+  });
 }
 
 ItineraryTask _task(
@@ -111,6 +177,7 @@ ItineraryTask _task(
   int duration, {
   List<String> after = const [],
   Timing timing = Timing.flexible,
+  TaskPriority priority = TaskPriority.normal,
 }) => ItineraryTask(
   id: id,
   title: id,
@@ -118,6 +185,7 @@ ItineraryTask _task(
   duration: duration,
   location: '',
   timing: timing,
+  priority: priority,
   after: after,
   transfer: 5,
 );

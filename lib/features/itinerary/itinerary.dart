@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 const minutesPerDay = 24 * 60;
 
 String clockTime(int minutes) {
@@ -21,6 +23,15 @@ enum Timing {
   final String label;
 }
 
+enum TaskPriority {
+  high('高'),
+  normal('普通'),
+  low('低');
+
+  const TaskPriority(this.label);
+  final String label;
+}
+
 class ItineraryTask {
   ItineraryTask({
     required this.id,
@@ -29,9 +40,12 @@ class ItineraryTask {
     required this.duration,
     required this.location,
     required this.timing,
+    this.priority = TaskPriority.normal,
+    Iterable<String> people = const [],
     this.transfer = 0,
     Iterable<String> after = const [],
-  }) : after = List.unmodifiable(after);
+  }) : people = List.unmodifiable(people),
+       after = List.unmodifiable(after);
 
   final String id;
   final String title;
@@ -39,6 +53,8 @@ class ItineraryTask {
   final int duration;
   final String location;
   final Timing timing;
+  final TaskPriority priority;
+  final List<String> people;
   final int transfer;
   final List<String> after;
 
@@ -57,6 +73,8 @@ class ItineraryTask {
     duration: duration ?? this.duration,
     location: location ?? this.location,
     timing: timing,
+    priority: priority,
+    people: people,
     transfer: transfer ?? this.transfer,
     after: after ?? this.after,
   );
@@ -68,6 +86,8 @@ class ItineraryTask {
     'duration': duration,
     'location': location,
     'timing': timing.name,
+    'priority': priority.name,
+    if (people.isNotEmpty) 'people': people,
     'transfer': transfer,
     'after': after,
   };
@@ -79,6 +99,11 @@ class ItineraryTask {
     duration: json['duration'] as int,
     location: json['location'] as String,
     timing: Timing.values.byName(json['timing'] as String),
+    priority: TaskPriority.values.firstWhere(
+      (priority) => priority.name == json['priority'],
+      orElse: () => TaskPriority.normal,
+    ),
+    people: (json['people'] as List?)?.cast<String>() ?? const [],
     transfer: json['transfer'] as int,
     after: (json['after'] as List).cast<String>(),
   );
@@ -134,6 +159,8 @@ class Planner {
       duration: 0,
       location: '地铁站 A 口',
       timing: Timing.flexible,
+      priority: TaskPriority.high,
+      people: ['小明'],
     ),
     ItineraryTask(
       id: demoExhibition,
@@ -142,6 +169,7 @@ class Planner {
       duration: 120,
       location: '城市美术馆',
       timing: Timing.reservation,
+      priority: TaskPriority.high,
       transfer: 10,
       after: [demoMeeting],
     ),
@@ -152,6 +180,7 @@ class Planner {
       duration: 0,
       location: '返程车站',
       timing: Timing.fixed,
+      priority: TaskPriority.high,
       transfer: 20,
       after: [demoExhibition],
     ),
@@ -255,33 +284,55 @@ class Planner {
     );
   }
 
-  List<ReplanOption> options(List<ItineraryTask> tasks, PlanAnalysis analysis) {
-    if (analysis.conflicts.isEmpty) return const [];
+  List<ReplanOption> options(
+    List<ItineraryTask> tasks,
+    PlanAnalysis analysis, {
+    String? anchorId,
+    bool lockAnchor = false,
+  }) {
+    if (analysis.conflicts.isEmpty && anchorId == null) return const [];
     final byId = {for (final task in tasks) task.id: task};
+    final anchor = byId[anchorId];
+    if (anchorId != null && anchor?.timing != Timing.flexible) return const [];
     final meeting = byId[demoMeeting];
     final exhibition = byId[demoExhibition];
-    final options = <ReplanOption>[];
+    final options = <String, ReplanOption>{};
 
-    void offer(String title, String description, List<ItineraryTask> revised) {
+    List<ItineraryTask>? settle(List<ItineraryTask> revised) {
       final PlanAnalysis preview;
       try {
         preview = analyze(revised);
       } on FormatException {
-        return;
+        return null;
       }
       final settled = [
         for (final task in revised)
-          if (task.timing == Timing.flexible)
+          if (task.timing == Timing.flexible &&
+              task.start < preview.earliestStarts[task.id]!)
             task.reschedule(start: preview.earliestStarts[task.id]!)
           else
             task,
       ];
-      if (settled.any((task) => task.start >= minutesPerDay)) return;
-      if (analyze(settled).conflicts.isEmpty) {
-        options.add(
-          ReplanOption(title, description, List.unmodifiable(settled)),
-        );
+      if (settled.any(
+        (task) =>
+            task.start < 0 ||
+            task.start >= minutesPerDay ||
+            task.duration < 0 ||
+            task.end > minutesPerDay ||
+            (lockAnchor && task.id == anchorId && task.start != anchor!.start),
+      )) {
+        return null;
       }
+      return settled;
+    }
+
+    void offer(String title, String description, List<ItineraryTask>? settled) {
+      if (settled == null || analyze(settled).conflicts.isNotEmpty) return;
+      final key = jsonEncode([for (final task in settled) task.toJson()]);
+      options.putIfAbsent(
+        key,
+        () => ReplanOption(title, description, List.unmodifiable(settled)),
+      );
     }
 
     final hasExhibitionConflict = analysis.conflicts.any(
@@ -297,48 +348,129 @@ class Planner {
       offer(
         '改到 ${clockTime(laterEntry)} 入场',
         '使用演示预约的可用场次，参观 $revisedDuration 分钟。',
-        [
+        settle([
           for (final task in tasks)
             if (task.id == demoExhibition)
               task.reschedule(start: laterEntry, duration: revisedDuration)
             else
               task,
-        ],
+        ]),
       );
 
       if (meeting.timing == Timing.flexible && meeting.after.isEmpty) {
-        offer('按原时间入场，看完展再会合', '保留预约，参观结束后再和朋友碰面。', [
-          for (final task in tasks)
-            switch (task.id) {
-              demoExhibition => task.reschedule(
-                after: task.after.where((id) => id != demoMeeting).toList(),
-              ),
-              demoMeeting => task.reschedule(
-                start: meeting.start > exhibition.end
-                    ? meeting.start
-                    : exhibition.end,
-                location:
-                    '${exhibition.location.isEmpty ? exhibition.title : exhibition.location}出口',
-                after: [demoExhibition],
-                transfer: 0,
-              ),
-              demoReturn
-                  when task.after.contains(demoExhibition) &&
-                      !task.after.contains(demoMeeting) =>
-                task.reschedule(after: [...task.after, demoMeeting]),
-              _ => task,
-            },
-        ]);
+        offer(
+          '按原时间入场，看完展再会合',
+          '保留预约，参观结束后再和朋友碰面。',
+          settle([
+            for (final task in tasks)
+              switch (task.id) {
+                demoExhibition => task.reschedule(
+                  after: task.after.where((id) => id != demoMeeting).toList(),
+                ),
+                demoMeeting => task.reschedule(
+                  start: meeting.start > exhibition.end
+                      ? meeting.start
+                      : exhibition.end,
+                  location:
+                      '${exhibition.location.isEmpty ? exhibition.title : exhibition.location}出口',
+                  after: [demoExhibition],
+                  transfer: 0,
+                ),
+                demoReturn
+                    when task.after.contains(demoExhibition) &&
+                        !task.after.contains(demoMeeting) =>
+                  task.reschedule(after: [...task.after, demoMeeting]),
+                _ => task,
+              },
+          ]),
+        );
       }
     }
-    if (options.isEmpty &&
-        analysis.conflicts.every(
-          (item) =>
-              item.issue == TaskIssue.dependency &&
-              item.task.timing == Timing.flexible,
-        )) {
-      offer('顺延可调整的行程', '按依赖顺序顺延，保留固定时间和预约。', tasks);
+
+    final queue = [tasks];
+    final visited = <String>{};
+    // Only move flexible tasks around independent conflicts. Dependencies,
+    // fixed times and real reservations are checked again after each move.
+    const searchLimit = 64;
+    for (var index = 0; index < queue.length && index < searchLimit; index++) {
+      final requested = queue[index];
+      final key = requested.map((task) => task.start).join(',');
+      if (!visited.add(key)) continue;
+      final revised = settle(requested);
+      if (revised == null) continue;
+      final conflicts = analyze(revised).conflicts;
+      if (conflicts.isEmpty) {
+        final changed = revised.where(
+          (task) => task.start != byId[task.id]!.start,
+        );
+        final first = changed.firstOrNull;
+        final title = index == 0
+            ? (first == null ? '按通知时间调整' : '顺延可调整的行程')
+            : '调整「${first!.title}」至 ${clockTime(first.start)}';
+        offer(title, '保留固定时间和预约，按前置关系安排可调整的行程。', revised);
+        continue;
+      }
+      final overlap = conflicts
+          .where((issue) => issue.issue == TaskIssue.overlap)
+          .firstOrNull;
+      if (overlap == null) continue;
+      final pair = [overlap.task, overlap.predecessor!];
+      for (final (i, task) in pair.indexed) {
+        if (task.timing != Timing.flexible ||
+            (lockAnchor && task.id == anchorId)) {
+          continue;
+        }
+        final other = pair[1 - i];
+        for (final start in [
+          other.start - (task.duration == 0 ? 1 : task.duration),
+          other.start + (other.duration == 0 ? 1 : other.duration),
+        ]) {
+          if (start < 0 ||
+              start >= minutesPerDay ||
+              (anchor?.id == task.id && start < anchor!.start)) {
+            continue;
+          }
+          queue.add([
+            for (final item in requested)
+              item.id == task.id ? item.reschedule(start: start) : item,
+          ]);
+        }
+      }
     }
-    return options;
+
+    final ranked =
+        [
+          for (final option in options.values)
+            (option: option, cost: _replanCost(byId, option.tasks)),
+        ]..sort((a, b) {
+          for (final priority in TaskPriority.values) {
+            final change = a.cost[priority.index].compareTo(
+              b.cost[priority.index],
+            );
+            if (change != 0) return change;
+          }
+          return a.option.title.compareTo(b.option.title);
+        });
+    return [for (final row in ranked.take(3)) row.option];
+  }
+
+  List<int> _replanCost(
+    Map<String, ItineraryTask> original,
+    List<ItineraryTask> revised,
+  ) {
+    final cost = List.filled(TaskPriority.values.length, 0);
+    for (final task in revised) {
+      final before = original[task.id]!;
+      final sameDependencies =
+          task.after.length == before.after.length &&
+          task.after.every(before.after.contains);
+      cost[before.priority.index] +=
+          (task.start - before.start).abs() +
+          (task.duration - before.duration).abs() +
+          (task.transfer - before.transfer).abs() +
+          (task.location == before.location ? 0 : 15) +
+          (sameDependencies ? 0 : 15);
+    }
+    return cost;
   }
 }
