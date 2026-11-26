@@ -71,6 +71,17 @@ python -m http.server 8781 --bind 127.0.0.1 --directory build/web
 
 启动后打开 [本机预览](http://127.0.0.1:8781/)。
 
+### Android Release OCR 修复与验证
+
+Release 构建时，R8 曾裁掉 ML Kit 注册类供反射调用的无参构造函数，导致 OCR 初始化时取不到 `SharedPrefManager` 并出现空引用。修复通过 R8 规则保留这些构造函数。[R8 保留规则](android/app/proguard-rules.pro)
+
+在 Android 13（API 33、x86_64）模拟器上，用同一个由 `flutter build apk --release` 生成的 APK 验证了两个入口。中文 OCR 在模拟器上实际运行，结构化日程回复由本地模拟模型服务提供。
+
+- 从 Android 文件 App 分享图片给涟漪，冷启动后识别并确认保存了 15:30 的「设计讨论」。
+- 从日程页「＋ → 图片识别日程」打开系统照片选择器，选图后识别并确认保存了 10:00 的「项目评审」。
+
+重启应用后，两条日程仍显示在当天时间轴上。[PR #6 实测记录](https://github.com/SWCONTEST12306/ripple-flutter/pull/6)
+
 ## 代码入口
 
 | 路径 | 内容 |
