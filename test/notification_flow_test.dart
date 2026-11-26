@@ -675,8 +675,13 @@ void _mockChannels(
   const changes = MethodChannel('ripple/notifications/changes');
   const modelChannel = MethodChannel('ripple/model');
   const sourcesChannel = MethodChannel('ripple/notification-sources');
+  const debugChannel = MethodChannel('ripple/debug');
 
   messenger.setMockMethodCallHandler(changes, (_) async => null);
+  messenger.setMockMethodCallHandler(debugChannel, (call) async {
+    expect(call.method, 'read');
+    return {'blockApi': false};
+  });
   messenger.setMockMethodCallHandler(modelChannel, (call) async {
     if (call.method == 'save') {
       onModelSave(Map<String, Object?>.from(call.arguments as Map));
@@ -715,6 +720,7 @@ void _mockChannels(
     messenger.setMockMethodCallHandler(changes, null);
     messenger.setMockMethodCallHandler(modelChannel, null);
     messenger.setMockMethodCallHandler(sourcesChannel, null);
+    messenger.setMockMethodCallHandler(debugChannel, null);
   });
 }
 
